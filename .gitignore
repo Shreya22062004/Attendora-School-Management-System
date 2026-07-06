@@ -1,0 +1,82 @@
+# ==============================
+# ENVIRONMENT VARIABLES / SECRETS
+# ==============================
+
+.env
+.env.*
+!.env.example
+
+# ==============================
+# PYTHON
+# ==============================
+
+backend/venv/
+venv/
+.venv/
+
+__pycache__/
+**/__pycache__/
+
+*.pyc
+*.pyo
+*.pyd
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ==============================
+# NODE / REACT / VITE
+# ==============================
+
+frontend/node_modules/
+node_modules/
+
+frontend/dist/
+dist/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==============================
+# DATABASE FILES AND BACKUPS
+# ==============================
+
+*.db
+*.sqlite
+*.sqlite3
+
+*.sql
+*.dump
+*.backup
+
+# ==============================
+# IDE FILES
+# ==============================
+
+.vscode/
+.idea/
+
+# ==============================
+# OPERATING SYSTEM FILES
+# ==============================
+
+.DS_Store
+Thumbs.db
+
+# ==============================
+# TEMPORARY FILES
+# ==============================
+
+*.tmp
+*.temp
+*.log
+
+# ==============================
+# GENERATED EXPORTS
+# ==============================
+
+exports/
+reports/
+backups/
