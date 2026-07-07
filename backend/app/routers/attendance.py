@@ -30,6 +30,20 @@ def allowed_classes(db: Session, u):
     return classes
 
 
+def ensure_class_access(db: Session, u, class_name: str):
+    # Admin/school users may access any class containing active students.
+    # Teachers must still pass an assignment check. This avoids loading and
+    # decoding SchoolConfig.classes_json on every sheet/submit/edit request.
+    if u.role == "teacher":
+        assigned = db.query(models.TeacherAssignment.id).filter(
+            models.TeacherAssignment.user_id == u.id,
+            models.TeacherAssignment.school_id == u.school_id,
+            models.TeacherAssignment.class_name == class_name,
+        ).first()
+        if not assigned:
+            raise HTTPException(400, "Invalid class or class not assigned to this teacher")
+
+
 @router.get("/classes")
 def classes(u=Depends(require_school_user), db: Session = Depends(get_db)):
     return {"classes": allowed_classes(db, u)}
@@ -52,8 +66,7 @@ def class_student_rows(db: Session, sid: int, class_name: str, section=None):
 
 
 def validate_and_get_ids(data, db: Session, u):
-    if data.class_name not in allowed_classes(db, u):
-        raise HTTPException(400, "Invalid class or class not assigned to this teacher")
+    ensure_class_access(db, u, data.class_name)
 
     q = db.query(models.Student.id).filter(
         models.Student.school_id == u.school_id,
@@ -124,8 +137,7 @@ def sheet(
     u=Depends(require_school_user),
     db: Session = Depends(get_db),
 ):
-    if class_name not in allowed_classes(db, u):
-        raise HTTPException(400, "Invalid class or class not assigned to this teacher")
+    ensure_class_access(db, u, class_name)
 
     students = class_student_rows(db, u.school_id, class_name, section)
     students = sorted(
