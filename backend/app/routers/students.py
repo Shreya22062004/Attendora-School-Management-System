@@ -1,6 +1,6 @@
 from fastapi import APIRouter,Depends,HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_,func
+from sqlalchemy import or_,func,case
 from typing import List
 from ..database import get_db
 from .. import models,schemas
@@ -30,7 +30,35 @@ def list_students(class_name:str|None=None,active_only:bool=True,search:str|None
  if active_only:q=q.filter(models.Student.is_active==True)
  if search and search.strip():
   t=f'%{search.strip()}%';q=q.filter(or_(models.Student.name.ilike(t),models.Student.admission_no.ilike(t),models.Student.pen_number.ilike(t),models.Student.category.ilike(t),models.Student.father_name.ilike(t),models.Student.mother_name.ilike(t)))
- order={'UKG/KG2/PP1':0,**{str(i):i for i in range(1,13)}};gender_order={'Girl':0,'Boy':1};return sorted(q.all(),key=lambda s:(order.get(s.class_name,99),gender_order.get(s.gender,2),s.name.lower()))
+ class_order=case(
+  {'UKG/KG2/PP1':0,**{str(i):i for i in range(1,13)}},
+  value=models.Student.class_name,
+  else_=99
+ )
+ gender_order=case({'Girl':0,'Boy':1},value=models.Student.gender,else_=2)
+ return q.order_by(class_order,gender_order,func.lower(models.Student.name)).all()
+
+@router.get('/promotion-list')
+def promotion_list(u=Depends(require_school_user),db:Session=Depends(get_db)):
+ return [
+  {
+   'id':s.id,
+   'class_name':s.class_name,
+   'section':s.section,
+   'stream':s.stream,
+   'is_active':s.is_active
+  }
+  for s in db.query(
+   models.Student.id,
+   models.Student.class_name,
+   models.Student.section,
+   models.Student.stream,
+   models.Student.is_active
+  ).filter(
+   models.Student.school_id==u.school_id,
+   models.Student.is_active==True
+  ).all()
+ ]
 @router.post('',response_model=schemas.StudentOut)
 def add(data:schemas.StudentCreate,u=Depends(require_school_user),db:Session=Depends(get_db)):
  g,a,p=validate(data,db,u.school_id);s=models.Student(school_id=u.school_id,name=data.name.strip(),class_name=data.class_name,section=data.section,stream=data.stream,gender=g,admission_no=a,pen_number=p,father_name=clean(data.father_name),mother_name=clean(data.mother_name),date_of_birth=data.date_of_birth,category=clean(data.category),admission_date=data.admission_date,is_active=True);db.add(s);db.commit();db.refresh(s);return s
