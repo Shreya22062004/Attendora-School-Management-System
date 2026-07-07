@@ -1,181 +1,322 @@
 import json
 from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
+
 from ..database import get_db
 from .. import models, schemas
 from ..auth import require_school_user
 
-router = APIRouter(prefix='/attendance', tags=['Attendance'])
+router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 
-def allowed_classes(db, u):
-    cfg = db.query(models.SchoolConfig.classes_json).filter(models.SchoolConfig.school_id == u.school_id).first()
-    classes = json.loads(cfg[0] or '[]') if cfg else []
-    if u.role == 'teacher':
-        assigned = {x[0] for x in db.query(models.TeacherAssignment.class_name).filter_by(user_id=u.id, school_id=u.school_id).all()}
+def allowed_classes(db: Session, u):
+    cfg = db.query(models.SchoolConfig.classes_json).filter(
+        models.SchoolConfig.school_id == u.school_id
+    ).scalar()
+    classes = json.loads(cfg or "[]")
+
+    if u.role == "teacher":
+        assigned = {
+            row[0]
+            for row in db.query(models.TeacherAssignment.class_name).filter(
+                models.TeacherAssignment.user_id == u.id,
+                models.TeacherAssignment.school_id == u.school_id,
+            ).all()
+        }
         classes = [c for c in classes if c in assigned]
     return classes
 
 
-@router.get('/classes')
+@router.get("/classes")
 def classes(u=Depends(require_school_user), db: Session = Depends(get_db)):
-    return {'classes': allowed_classes(db, u)}
+    return {"classes": allowed_classes(db, u)}
 
 
-def students_for(db, sid, cls, section=None):
-    q = db.query(models.Student).filter(
+def class_student_rows(db: Session, sid: int, class_name: str, section=None):
+    q = db.query(
+        models.Student.id,
+        models.Student.name,
+        models.Student.gender,
+        models.Student.section,
+    ).filter(
         models.Student.school_id == sid,
-        models.Student.class_name == cls,
-        models.Student.is_active.is_(True)
+        models.Student.class_name == class_name,
+        models.Student.is_active.is_(True),
     )
     if section:
         q = q.filter(models.Student.section == section)
     return q.all()
 
 
-def validate(data, db, u):
+def validate_and_get_ids(data, db: Session, u):
     if data.class_name not in allowed_classes(db, u):
-        raise HTTPException(400, 'Invalid class or class not assigned to this teacher')
-    valid = {x[0] for x in db.query(models.Student.id).filter(
+        raise HTTPException(400, "Invalid class or class not assigned to this teacher")
+
+    q = db.query(models.Student.id).filter(
         models.Student.school_id == u.school_id,
         models.Student.class_name == data.class_name,
         models.Student.is_active.is_(True),
-        *([models.Student.section == data.section] if data.section else [])
-    ).all()}
-    got = {r.student_id for r in data.records}
-    if not valid:
-        raise HTTPException(400, 'No active students found in this class')
-    if valid != got:
-        raise HTTPException(400, 'Attendance must include every active student in selected class')
-    if any(r.status not in ('Present', 'Absent') for r in data.records):
-        raise HTTPException(400, 'Invalid status')
+    )
+    if data.section:
+        q = q.filter(models.Student.section == data.section)
+
+    valid_ids = {row[0] for row in q.all()}
+    received_ids = {r.student_id for r in data.records}
+
+    if not valid_ids:
+        raise HTTPException(400, "No active students found in this class")
+    if valid_ids != received_ids or len(received_ids) != len(data.records):
+        raise HTTPException(400, "Attendance must include every active student in selected class exactly once")
+    if any(r.status not in ("Present", "Absent") for r in data.records):
+        raise HTTPException(400, "Invalid status")
+
+    return valid_ids
 
 
-def ensure_working_day(db, sid, d):
-    m = db.query(models.SchoolCalendar).filter_by(school_id=sid, calendar_date=d).first()
-    if m and m.day_type != 'Working Day':
-        raise HTTPException(400, f'Attendance cannot be marked: {m.day_type}' + (f' - {m.description}' if m.description else ''))
-    if d.weekday() == 6 and not (m and m.day_type == 'Working Day'):
-        raise HTTPException(400, 'Attendance cannot be marked on Sunday')
+def ensure_working_day(db: Session, sid: int, d: date):
+    day = db.query(
+        models.SchoolCalendar.day_type,
+        models.SchoolCalendar.description,
+    ).filter(
+        models.SchoolCalendar.school_id == sid,
+        models.SchoolCalendar.calendar_date == d,
+    ).first()
+
+    if day and day.day_type != "Working Day":
+        detail = f"Attendance cannot be marked: {day.day_type}"
+        if day.description:
+            detail += f" - {day.description}"
+        raise HTTPException(400, detail)
+
+    if d.weekday() == 6 and not (day and day.day_type == "Working Day"):
+        raise HTTPException(400, "Attendance cannot be marked on Sunday")
 
 
-def active_year(db, sid, d):
-    return db.query(models.AcademicYear).filter(
+def active_year_id(db: Session, sid: int, d: date):
+    return db.query(models.AcademicYear.id).filter(
         models.AcademicYear.school_id == sid,
         models.AcademicYear.start_date <= d,
-        models.AcademicYear.end_date >= d
-    ).order_by(models.AcademicYear.is_active.desc()).first()
+        models.AcademicYear.end_date >= d,
+    ).order_by(models.AcademicYear.is_active.desc()).scalar()
 
 
-@router.get('/sheet')
-def sheet(class_name: str, attendance_date: date, section: str | None = None,
-          u=Depends(require_school_user), db: Session = Depends(get_db)):
-    if class_name not in allowed_classes(db, u):
-        raise HTTPException(400, 'Invalid class or class not assigned to this teacher')
-
-    students = sorted(students_for(db, u.school_id, class_name, section),
-                      key=lambda x: (0 if x.gender == 'Girl' else 1 if x.gender == 'Boy' else 2, x.name.lower()))
-
-    q = db.query(models.AttendanceSession).filter_by(
-        school_id=u.school_id, class_name=class_name, attendance_date=attendance_date)
+def session_query(db: Session, sid: int, class_name: str, attendance_date: date, section=None):
+    q = db.query(models.AttendanceSession).filter(
+        models.AttendanceSession.school_id == sid,
+        models.AttendanceSession.class_name == class_name,
+        models.AttendanceSession.attendance_date == attendance_date,
+    )
     if section:
         q = q.filter(models.AttendanceSession.section == section)
     else:
         q = q.filter(models.AttendanceSession.section.is_(None))
-    sess = q.first()
+    return q
+
+
+@router.get("/sheet")
+def sheet(
+    class_name: str,
+    attendance_date: date,
+    section: str | None = None,
+    u=Depends(require_school_user),
+    db: Session = Depends(get_db),
+):
+    if class_name not in allowed_classes(db, u):
+        raise HTTPException(400, "Invalid class or class not assigned to this teacher")
+
+    students = class_student_rows(db, u.school_id, class_name, section)
+    students = sorted(
+        students,
+        key=lambda x: (
+            0 if x.gender == "Girl" else 1 if x.gender == "Boy" else 2,
+            x.name.lower(),
+        ),
+    )
+
+    sess = session_query(
+        db, u.school_id, class_name, attendance_date, section
+    ).first()
 
     student_ids = [s.id for s in students]
     status_map = {}
     if student_ids:
-        status_map = dict(db.query(models.Attendance.student_id, models.Attendance.status).filter(
-            models.Attendance.attendance_date == attendance_date,
-            models.Attendance.student_id.in_(student_ids)
-        ).all())
+        status_map = dict(
+            db.query(models.Attendance.student_id, models.Attendance.status).filter(
+                models.Attendance.attendance_date == attendance_date,
+                models.Attendance.student_id.in_(student_ids),
+            ).all()
+        )
 
     rows = [
-        {'student_id': s.id, 'name': s.name, 'gender': s.gender, 'section': s.section,
-         'status': status_map.get(s.id, 'Present')}
+        {
+            "student_id": s.id,
+            "name": s.name,
+            "gender": s.gender,
+            "section": s.section,
+            "status": status_map.get(s.id, "Present"),
+        }
         for s in students
     ]
+
     return {
-        'submitted': bool(sess),
-        'edit_count': sess.edit_count if sess else 0,
-        'edits_remaining': max(0, 6 - sess.edit_count) if sess else 6,
-        'is_locked': sess.is_locked if sess else False,
-        'records': rows
+        "submitted": bool(sess),
+        "edit_count": sess.edit_count if sess else 0,
+        "edits_remaining": max(0, 6 - sess.edit_count) if sess else 6,
+        "is_locked": sess.is_locked if sess else False,
+        "records": rows,
     }
 
 
-@router.post('/submit')
-def submit(data: schemas.AttendanceSheet, u=Depends(require_school_user), db: Session = Depends(get_db)):
+@router.post("/submit")
+def submit(
+    data: schemas.AttendanceSheet,
+    u=Depends(require_school_user),
+    db: Session = Depends(get_db),
+):
     ensure_working_day(db, u.school_id, data.attendance_date)
-    validate(data, db, u)
-    y = active_year(db, u.school_id, data.attendance_date)
+    validate_and_get_ids(data, db, u)
 
-    q = db.query(models.AttendanceSession.id).filter_by(
-        school_id=u.school_id, class_name=data.class_name, attendance_date=data.attendance_date)
-    q = q.filter(models.AttendanceSession.section == data.section) if data.section else q.filter(models.AttendanceSession.section.is_(None))
-    if q.first():
-        raise HTTPException(409, 'Attendance already submitted. Reload the sheet and use edit.')
+    existing_session_id = session_query(
+        db, u.school_id, data.class_name, data.attendance_date, data.section
+    ).with_entities(models.AttendanceSession.id).scalar()
 
-    sess = models.AttendanceSession(
-        school_id=u.school_id, academic_year_id=y.id if y else None,
-        class_name=data.class_name, section=data.section,
-        attendance_date=data.attendance_date, created_by=u.id)
-    db.add(sess)
+    if existing_session_id:
+        raise HTTPException(409, "Attendance already submitted. Reload the sheet and use edit.")
 
-    db.bulk_insert_mappings(models.Attendance, [
-        {'student_id': r.student_id, 'academic_year_id': y.id if y else None,
-         'attendance_date': data.attendance_date, 'status': r.status}
-        for r in data.records
-    ])
-    db.add(models.AuditLog(
-        school_id=u.school_id, user_id=u.id, action='SUBMIT', entity_type='AttendanceSession',
-        new_value=json.dumps({'class': data.class_name, 'section': data.section,
-                              'date': str(data.attendance_date), 'records': len(data.records)})))
-    db.commit()
-    return {'message': 'Attendance submitted', 'edits_remaining': 6, 'is_locked': False}
+    year_id = active_year_id(db, u.school_id, data.attendance_date)
+
+    try:
+        db.add(
+            models.AttendanceSession(
+                school_id=u.school_id,
+                academic_year_id=year_id,
+                class_name=data.class_name,
+                section=data.section,
+                attendance_date=data.attendance_date,
+                created_by=u.id,
+            )
+        )
+
+        db.bulk_insert_mappings(
+            models.Attendance,
+            [
+                {
+                    "student_id": r.student_id,
+                    "academic_year_id": year_id,
+                    "attendance_date": data.attendance_date,
+                    "status": r.status,
+                }
+                for r in data.records
+            ],
+        )
+
+        db.add(
+            models.AuditLog(
+                school_id=u.school_id,
+                user_id=u.id,
+                action="SUBMIT",
+                entity_type="AttendanceSession",
+                new_value=json.dumps(
+                    {
+                        "class": data.class_name,
+                        "section": data.section,
+                        "date": str(data.attendance_date),
+                        "records": len(data.records),
+                    }
+                ),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Attendance submitted",
+        "edits_remaining": 6,
+        "is_locked": False,
+    }
 
 
-@router.put('/edit')
-def edit(data: schemas.AttendanceSheet, u=Depends(require_school_user), db: Session = Depends(get_db)):
+@router.put("/edit")
+def edit(
+    data: schemas.AttendanceSheet,
+    u=Depends(require_school_user),
+    db: Session = Depends(get_db),
+):
     ensure_working_day(db, u.school_id, data.attendance_date)
-    validate(data, db, u)
+    validate_and_get_ids(data, db, u)
 
-    q = db.query(models.AttendanceSession).filter_by(
-        school_id=u.school_id, class_name=data.class_name, attendance_date=data.attendance_date)
-    q = q.filter(models.AttendanceSession.section == data.section) if data.section else q.filter(models.AttendanceSession.section.is_(None))
-    sess = q.first()
+    sess = session_query(
+        db, u.school_id, data.class_name, data.attendance_date, data.section
+    ).first()
+
     if not sess:
-        raise HTTPException(404, 'Submit attendance first')
+        raise HTTPException(404, "Submit attendance first")
     if sess.is_locked or sess.edit_count >= 6:
-        raise HTTPException(403, 'Attendance is locked')
+        raise HTTPException(403, "Attendance is locked")
 
     ids = [r.student_id for r in data.records]
-    existing = {a.student_id: a for a in db.query(models.Attendance).filter(
+    existing_rows = db.query(
+        models.Attendance.id,
+        models.Attendance.student_id,
+        models.Attendance.status,
+    ).filter(
         models.Attendance.attendance_date == data.attendance_date,
-        models.Attendance.student_id.in_(ids)
-    ).all()}
+        models.Attendance.student_id.in_(ids),
+    ).all()
 
-    changed = 0
+    existing = {row.student_id: row for row in existing_rows}
+    updates = []
+    history = []
+
     for r in data.records:
-        a = existing.get(r.student_id)
-        if a and a.status != r.status:
-            db.add(models.AttendanceHistory(
-                attendance_id=a.id, student_id=r.student_id, attendance_date=data.attendance_date,
-                old_status=a.status, new_status=r.status, edited_by=u.id))
-            a.status = r.status
-            changed += 1
+        old = existing.get(r.student_id)
+        if old and old.status != r.status:
+            updates.append({"id": old.id, "status": r.status})
+            history.append(
+                {
+                    "attendance_id": old.id,
+                    "student_id": r.student_id,
+                    "attendance_date": data.attendance_date,
+                    "old_status": old.status,
+                    "new_status": r.status,
+                    "edited_by": u.id,
+                }
+            )
 
+    changed = len(updates)
     if not changed:
-        raise HTTPException(400, 'No attendance status was changed')
+        raise HTTPException(400, "No attendance status was changed")
 
-    sess.edit_count += 1
-    sess.is_locked = sess.edit_count >= 6
-    db.add(models.AuditLog(
-        school_id=u.school_id, user_id=u.id, action='EDIT', entity_type='AttendanceSession',
-        entity_id=str(sess.id), new_value=json.dumps({'changed_records': changed})))
-    db.commit()
-    return {'message': 'Attendance updated', 'changed_records': changed,
-            'edits_remaining': max(0, 6 - sess.edit_count), 'is_locked': sess.is_locked}
+    try:
+        db.bulk_update_mappings(models.Attendance, updates)
+        db.bulk_insert_mappings(models.AttendanceHistory, history)
+
+        sess.edit_count += 1
+        sess.is_locked = sess.edit_count >= 6
+
+        db.add(
+            models.AuditLog(
+                school_id=u.school_id,
+                user_id=u.id,
+                action="EDIT",
+                entity_type="AttendanceSession",
+                entity_id=str(sess.id),
+                new_value=json.dumps({"changed_records": changed}),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Attendance updated",
+        "changed_records": changed,
+        "edits_remaining": max(0, 6 - sess.edit_count),
+        "is_locked": sess.is_locked,
+    }
