@@ -1,1 +1,17 @@
-{"name":"School Attendance System","short_name":"Attendance","description":"Daily school attendance and reports","start_url":"/","display":"standalone","background_color":"#f4f7fb","theme_color":"#13294b","icons":[{"src":"/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"/icon-512.png","sizes":"512x512","type":"image/png"}]}
+{
+  "name": "Attendora School Management System",
+  "short_name": "Attendora",
+  "description": "Smart Attendance and School Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#13294b",
+  "icons": [
+    {
+      "src": "/attendora-logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
