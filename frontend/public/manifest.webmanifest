@@ -2,14 +2,22 @@
   "name": "Attendora School Management System",
   "short_name": "Attendora",
   "description": "Smart Attendance and School Management System",
+  "id": "/?pwa=attendora-v2",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#f4f7fb",
   "theme_color": "#13294b",
   "icons": [
     {
-      "src": "/attendora-logo.png",
-      "sizes": "1024x1024",
+      "src": "/attendora-logo-192.png?v=2",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/attendora-logo-512.png?v=2",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     }

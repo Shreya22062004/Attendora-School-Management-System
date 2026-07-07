@@ -1,4 +1,4 @@
-const CACHE = "school-attendance-v2";
+const CACHE = "attendora-pwa-v3";
 const APP_SHELL = ["/"];
 
 self.addEventListener("install", event => {
