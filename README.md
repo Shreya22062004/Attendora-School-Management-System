@@ -234,6 +234,44 @@ PostgreSQL Database
 
 All authorized school users connect to one deployed backend, while the backend communicates with the shared production PostgreSQL database.
 
+## Deployed Applications
+
+Attendora is deployed as a full-stack web application with separate frontend, backend API and cloud PostgreSQL database services.
+
+### Frontend Application
+
+The production frontend is deployed using Vercel.
+
+**Live Application:**
+
+https://attendora-school-management-system.vercel.app/
+
+### Backend API
+
+The FastAPI backend is deployed using Hugging Face Spaces and serves the REST API used by the frontend application.
+
+**Backend Deployment:**
+
+https://huggingface.co/spaces/Shreyashu123/attendora-backend
+
+### Production Database
+
+The application uses a cloud-hosted PostgreSQL database provided by Neon.
+
+The database securely stores school configurations, users, student records, attendance data, academic-year information, holidays and other application data.
+
+> Database credentials and connection details are intentionally not included in this repository for security reasons.
+
+## Final Deployed Application
+
+The complete Attendora School Management System can be accessed here:
+
+### Attendora School Management System
+
+https://attendora-school-management-system.vercel.app/
+
+The deployed application connects the React frontend, FastAPI backend and PostgreSQL production database to provide a centralized multi-school attendance and student management platform.
+
 ## Recommended Pre-Deployment Checks
 
 Before real-world use, verify authentication, school-level data isolation, all student import fields, duplicate-name student handling, attendance submission and editing, holiday behavior, percentage calculations, report exports, academic-year promotion and revert, teacher class assignments, audit timestamps, mobile responsiveness, CORS configuration, database backups and backup restoration.
