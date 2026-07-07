@@ -224,6 +224,23 @@ def submit(
                 for r in data.records
             ],
         )
+
+        db.add(
+            models.AuditLog(
+                school_id=u.school_id,
+                user_id=u.id,
+                action="SUBMIT",
+                entity_type="AttendanceSession",
+                new_value=json.dumps(
+                    {
+                        "class": data.class_name,
+                        "section": data.section,
+                        "date": str(data.attendance_date),
+                        "records": len(data.records),
+                    }
+                ),
+            )
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -243,40 +260,7 @@ def edit(
     db: Session = Depends(get_db),
 ):
     ensure_working_day(db, u.school_id, data.attendance_date)
-    ensure_class_access(db, u, data.class_name)
-
-    # One joined query replaces the old separate validation query and attendance query.
-    q = db.query(
-        models.Student.id.label("student_id"),
-        models.Attendance.id.label("attendance_id"),
-        models.Attendance.status.label("old_status"),
-    ).outerjoin(
-        models.Attendance,
-        and_(
-            models.Attendance.student_id == models.Student.id,
-            models.Attendance.attendance_date == data.attendance_date,
-        ),
-    ).filter(
-        models.Student.school_id == u.school_id,
-        models.Student.class_name == data.class_name,
-        models.Student.is_active.is_(True),
-    )
-    if data.section:
-        q = q.filter(models.Student.section == data.section)
-
-    rows = q.all()
-    valid_ids = {row.student_id for row in rows}
-    received_ids = {r.student_id for r in data.records}
-
-    if not valid_ids:
-        raise HTTPException(400, "No active students found in this class")
-    if valid_ids != received_ids or len(received_ids) != len(data.records):
-        raise HTTPException(
-            400,
-            "Attendance must include every active student in selected class exactly once",
-        )
-    if any(r.status not in ("Present", "Absent") for r in data.records):
-        raise HTTPException(400, "Invalid status")
+    validate_and_get_ids(data, db, u)
 
     sess = session_query(
         db, u.school_id, data.class_name, data.attendance_date, data.section
@@ -287,25 +271,56 @@ def edit(
     if sess.is_locked or sess.edit_count >= 6:
         raise HTTPException(403, "Attendance is locked")
 
-    existing = {row.student_id: row for row in rows if row.attendance_id is not None}
+    ids = [r.student_id for r in data.records]
+    existing_rows = db.query(
+        models.Attendance.id,
+        models.Attendance.student_id,
+        models.Attendance.status,
+    ).filter(
+        models.Attendance.attendance_date == data.attendance_date,
+        models.Attendance.student_id.in_(ids),
+    ).all()
+
+    existing = {row.student_id: row for row in existing_rows}
     updates = []
+    history = []
 
     for r in data.records:
         old = existing.get(r.student_id)
-        if old and old.old_status != r.status:
-            updates.append({"id": old.attendance_id, "status": r.status})
+        if old and old.status != r.status:
+            updates.append({"id": old.id, "status": r.status})
+            history.append(
+                {
+                    "attendance_id": old.id,
+                    "student_id": r.student_id,
+                    "attendance_date": data.attendance_date,
+                    "old_status": old.status,
+                    "new_status": r.status,
+                    "edited_by": u.id,
+                }
+            )
 
     changed = len(updates)
     if not changed:
         raise HTTPException(400, "No attendance status was changed")
 
     try:
-        # One batched UPDATE. AttendanceHistory and AuditLog writes were intentionally
-        # removed because they added remote database round trips to the save path.
         db.bulk_update_mappings(models.Attendance, updates)
+        db.bulk_insert_mappings(models.AttendanceHistory, history)
 
         sess.edit_count += 1
         sess.is_locked = sess.edit_count >= 6
+
+        db.add(
+            models.AuditLog(
+                school_id=u.school_id,
+                user_id=u.id,
+                action="EDIT",
+                entity_type="AttendanceSession",
+                entity_id=str(sess.id),
+                new_value=json.dumps({"changed_records": changed}),
+            )
+        )
         db.commit()
     except Exception:
         db.rollback()
