@@ -10,6 +10,7 @@ router=APIRouter(prefix='/students',tags=['Students'])
 def clean(v): return v.strip() if v and v.strip() else None
 def validate(data,db,sid,student_id=None):
  if not data.name.strip(): raise HTTPException(400,'Invalid student data')
+ if data.admission_date and data.admission_date > date.today(): raise HTTPException(400,"Admission date cannot be later than today's date")
  cfg=db.query(models.SchoolConfig).filter(models.SchoolConfig.school_id==sid).first()
  if cfg:
   import json

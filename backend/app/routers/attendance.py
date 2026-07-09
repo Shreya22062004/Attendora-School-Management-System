@@ -92,17 +92,45 @@ def validate_and_get_ids(data, db: Session, u):
 
 
 def ensure_date_in_academic_year(db: Session, sid: int, d: date):
+    today = date.today()
+
+    if d > today:
+        raise HTTPException(
+            400,
+            "Attendance date cannot be later than today's date",
+        )
+
+    # Attendora academic year is always April 1 to March 31.
+    if today.month >= 4:
+        academic_start = date(today.year, 4, 1)
+        academic_end = date(today.year + 1, 3, 31)
+    else:
+        academic_start = date(today.year - 1, 4, 1)
+        academic_end = date(today.year, 3, 31)
+
+    if not (academic_start <= d <= academic_end):
+        raise HTTPException(
+            400,
+            f"Selected date is outside the current academic year "
+            f"({academic_start:%d/%m/%Y} to {academic_end:%d/%m/%Y})",
+        )
+
+    # Link attendance to the configured matching year when available.
+    # Fall back to the active year so attendance is not blocked by a
+    # misconfigured start/end date in an existing deployment.
     year = db.query(models.AcademicYear).filter(
         models.AcademicYear.school_id == sid,
         models.AcademicYear.start_date <= d,
         models.AcademicYear.end_date >= d,
-    ).first()
+    ).order_by(models.AcademicYear.is_active.desc()).first()
+
     if not year:
-        raise HTTPException(
-            400,
-            "Selected date is outside the configured academic year range",
-        )
-    return year.id
+        year = db.query(models.AcademicYear).filter(
+            models.AcademicYear.school_id == sid,
+            models.AcademicYear.is_active == True,
+        ).first()
+
+    return year.id if year else None
 
 
 def ensure_working_day(db: Session, sid: int, d: date):
@@ -125,11 +153,19 @@ def ensure_working_day(db: Session, sid: int, d: date):
 
 
 def active_year_id(db: Session, sid: int, d: date):
-    return db.query(models.AcademicYear.id).filter(
+    year_id = db.query(models.AcademicYear.id).filter(
         models.AcademicYear.school_id == sid,
         models.AcademicYear.start_date <= d,
         models.AcademicYear.end_date >= d,
     ).order_by(models.AcademicYear.is_active.desc()).scalar()
+
+    if year_id is None:
+        year_id = db.query(models.AcademicYear.id).filter(
+            models.AcademicYear.school_id == sid,
+            models.AcademicYear.is_active == True,
+        ).scalar()
+
+    return year_id
 
 
 def session_query(db: Session, sid: int, class_name: str, attendance_date: date, section=None):

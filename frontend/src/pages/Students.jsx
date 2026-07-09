@@ -644,6 +644,7 @@ export default function Students() {
               Admission Date
               <input
                 type="date"
+                max={new Date().toISOString().split("T")[0]}
                 value={form.admission_date}
                 required={isRequired("admission_date")}
                 onChange={(event) =>
