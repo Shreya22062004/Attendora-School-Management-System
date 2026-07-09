@@ -91,6 +91,12 @@ def delete(
             'Exit date cannot be before admission date'
         )
 
+    if exit_date > date.today():
+        raise HTTPException(
+            400,
+            'Exit date cannot be later than today'
+        )
+
     s.is_active=False
     s.exit_status='Removed'
     s.exit_date=exit_date

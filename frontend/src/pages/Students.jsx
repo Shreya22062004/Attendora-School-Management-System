@@ -307,8 +307,45 @@ export default function Students() {
 
   const removeStudent = async (student) => {
 
+    const exitDate = window.prompt(
+      `Enter exit date for ${student.name} (YYYY-MM-DD):`
+    );
+
+
+    if (!exitDate) {
+      return;
+    }
+
+
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+    if (!datePattern.test(exitDate)) {
+      setMessage("Please enter exit date in YYYY-MM-DD format");
+      return;
+    }
+
+
+    const admissionDate = student.admission_date
+      ? String(student.admission_date).slice(0, 10)
+      : null;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+
+    if (admissionDate && exitDate < admissionDate) {
+      setMessage("Exit date cannot be before admission date");
+      return;
+    }
+
+
+    if (exitDate > today) {
+      setMessage("Exit date cannot be later than today");
+      return;
+    }
+
+
     const confirmed = window.confirm(
-      `Remove ${student.name} from active students?`
+      `Remove ${student.name} from active students with exit date ${exitDate}?`
     );
 
 
@@ -323,7 +360,12 @@ export default function Students() {
     try {
 
       await api.delete(
-        `/students/${student.id}`
+        `/students/${student.id}`,
+        {
+          params: {
+            exit_date: exitDate
+          }
+        }
       );
 
 
@@ -331,7 +373,7 @@ export default function Students() {
 
 
       setMessage(
-        "Student removed successfully"
+        `Student removed successfully. Exit date: ${exitDate}`
       );
 
 
