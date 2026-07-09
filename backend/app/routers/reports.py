@@ -550,8 +550,10 @@ def yearly_matrix(
     year,
     holidays=None,
 ):
-    start = date(year, 1, 1)
-    end = date(year, 12, 31)
+    # Academic year: April of `year` through March of `year + 1`
+    start = date(year, 4, 1)
+    end = date(year + 1, 3, 31)
+    academic_months = [(year, m) for m in range(4, 13)] + [(year + 1, m) for m in range(1, 4)]
 
     if holidays is None:
         holidays = holiday_dates(
@@ -603,15 +605,15 @@ def yearly_matrix(
         if row.attendance_date in holidays:
             continue
 
-        month_number = row.attendance_date.month
+        month_key = (row.attendance_date.year, row.attendance_date.month)
 
         if row.status == "Present":
-            monthly_stats[row.student_id][month_number][
+            monthly_stats[row.student_id][month_key][
                 "present"
             ] += 1
 
         elif row.status == "Absent":
-            monthly_stats[row.student_id][month_number][
+            monthly_stats[row.student_id][month_key][
                 "absent"
             ] += 1
 
@@ -627,9 +629,9 @@ def yearly_matrix(
             {},
         )
 
-        for month_number in range(1, 13):
+        for month_year, month_number in academic_months:
             month_stats = student_stats.get(
-                month_number,
+                (month_year, month_number),
                 {
                     "present": 0,
                     "absent": 0,
@@ -918,8 +920,9 @@ def yearly(
 ):
     sid = u.school_id
 
-    start = date(year, 1, 1)
-    end = date(year, 12, 31)
+    # Academic year: April of `year` through March of `year + 1`
+    start = date(year, 4, 1)
+    end = date(year + 1, 3, 31)
 
     holidays = holiday_dates(
         db,

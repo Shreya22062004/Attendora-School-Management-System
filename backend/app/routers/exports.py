@@ -113,7 +113,7 @@ def monthly_x(year:int,month:int,u=Depends(require_school_user),db:Session=Depen
  return xlsx_response(wb, f'monthly-{year}-{month:02d}.xlsx')
 @router.get('/yearly.xlsx')
 def yearly_x(year:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
- start=date(year,1,1);end=date(year,12,31);wb=Workbook();summary_sheet(wb,db,u.school_id,start,end,f'Yearly Attendance Report - {year}');student_sheet(wb,db,u.school_id,start,end);ws=wb.create_sheet('Month-wise Register');hdr(ws,school(db,u.school_id),f'Month-wise Register - {year}');ws.append([]);ws.append(['Class','Student Name','Gender']+[month_name[i] for i in range(1,13)]+['Present','Absent','Working Days','Attendance %'])
+ start=date(year,4,1);end=date(year+1,3,31);label=f'{year}-{str(year+1)[-2:]}';months=list(range(4,13))+list(range(1,4));wb=Workbook();summary_sheet(wb,db,u.school_id,start,end,f'Yearly Attendance Report - {label}');student_sheet(wb,db,u.school_id,start,end);ws=wb.create_sheet('Month-wise Register');hdr(ws,school(db,u.school_id),f'Month-wise Register - {label}');ws.append([]);ws.append(['Class','Student Name','Gender']+[month_name[i] for i in months]+['Present','Absent','Working Days','Attendance %'])
  for r in yearly_matrix(db,u.school_id,year):ws.append([r['class_name'],r['student_name'],r['gender']]+r['months']+[r['present'],r['absent'],r['working_days'],r['percentage']])
  set_attendance_excel_widths(ws, 'yearly')
  ws.freeze_panes = 'D7'
@@ -132,7 +132,7 @@ def monthly_p(year:int,month:int,u=Depends(require_school_user),db:Session=Depen
  start=date(year,month,1);end=date(year,month,monthrange(year,month)[1]);m=monthly_matrix(db,u.school_id,year,month);last=monthrange(year,month)[1];headers=['Class','Student Name','Gender']+[str(i) for i in range(1,last+1)]+['P','A','Marked','%'];rows=[[r['class_name'],r['student_name'],r['gender']]+r['days']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m];return report_pdf(db,u.school_id,start,end,f'Monthly Attendance Report - {month_name[month]} {year}',f'monthly-{year}-{month:02d}.pdf',rows,('Date-wise Attendance Register',headers))
 @router.get('/yearly.pdf')
 def yearly_p(year:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
- start=date(year,1,1);end=date(year,12,31);m=yearly_matrix(db,u.school_id,year);headers=['Class','Student Name','Gender']+[month_name[i][:3] for i in range(1,13)]+['P','A','Marked','%'];rows=[[r['class_name'],r['student_name'],r['gender']]+r['months']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m];return report_pdf(db,u.school_id,start,end,f'Yearly Attendance Report - {year}',f'yearly-{year}.pdf',rows,('Month-wise Attendance Register',headers))
+ start=date(year,4,1);end=date(year+1,3,31);label=f'{year}-{str(year+1)[-2:]}';months=list(range(4,13))+list(range(1,4));m=yearly_matrix(db,u.school_id,year);headers=['Class','Student Name','Gender']+[month_name[i][:3] for i in months]+['P','A','Marked','%'];rows=[[r['class_name'],r['student_name'],r['gender']]+r['months']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m];return report_pdf(db,u.school_id,start,end,f'Yearly Attendance Report - {label}',f'yearly-{year}-{year+1}.pdf',rows,('Month-wise Attendance Register',headers))
 
 @router.get('/students.xlsx')
 def students_x(
