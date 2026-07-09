@@ -49,7 +49,7 @@ def classes(u=Depends(require_school_user), db: Session = Depends(get_db)):
     return {"classes": allowed_classes(db, u)}
 
 
-def class_student_rows(db: Session, sid: int, class_name: str, section=None):
+def class_student_rows(db: Session, sid: int, class_name: str, attendance_date: date, section=None):
     q = db.query(
         models.Student.id,
         models.Student.name,
@@ -58,7 +58,8 @@ def class_student_rows(db: Session, sid: int, class_name: str, section=None):
     ).filter(
         models.Student.school_id == sid,
         models.Student.class_name == class_name,
-        models.Student.is_active.is_(True),
+        or_(models.Student.admission_date.is_(None), models.Student.admission_date <= attendance_date),
+        or_(models.Student.exit_date.is_(None), models.Student.exit_date >= attendance_date),
     )
     if section:
         q = q.filter(models.Student.section == section)
@@ -71,7 +72,8 @@ def validate_and_get_ids(data, db: Session, u):
     q = db.query(models.Student.id).filter(
         models.Student.school_id == u.school_id,
         models.Student.class_name == data.class_name,
-        models.Student.is_active.is_(True),
+        or_(models.Student.admission_date.is_(None), models.Student.admission_date <= data.attendance_date),
+        or_(models.Student.exit_date.is_(None), models.Student.exit_date >= data.attendance_date),
     )
     if data.section:
         q = q.filter(models.Student.section == data.section)
@@ -87,6 +89,20 @@ def validate_and_get_ids(data, db: Session, u):
         raise HTTPException(400, "Invalid status")
 
     return valid_ids
+
+
+def ensure_date_in_academic_year(db: Session, sid: int, d: date):
+    year = db.query(models.AcademicYear).filter(
+        models.AcademicYear.school_id == sid,
+        models.AcademicYear.start_date <= d,
+        models.AcademicYear.end_date >= d,
+    ).first()
+    if not year:
+        raise HTTPException(
+            400,
+            "Selected date is outside the configured academic year range",
+        )
+    return year.id
 
 
 def ensure_working_day(db: Session, sid: int, d: date):
@@ -138,8 +154,9 @@ def sheet(
     db: Session = Depends(get_db),
 ):
     ensure_class_access(db, u, class_name)
+    ensure_date_in_academic_year(db, u.school_id, attendance_date)
 
-    students = class_student_rows(db, u.school_id, class_name, section)
+    students = class_student_rows(db, u.school_id, class_name, attendance_date, section)
     students = sorted(
         students,
         key=lambda x: (
@@ -188,6 +205,7 @@ def submit(
     u=Depends(require_school_user),
     db: Session = Depends(get_db),
 ):
+    ensure_date_in_academic_year(db, u.school_id, data.attendance_date)
     ensure_working_day(db, u.school_id, data.attendance_date)
     validate_and_get_ids(data, db, u)
 
@@ -259,6 +277,7 @@ def edit(
     u=Depends(require_school_user),
     db: Session = Depends(get_db),
 ):
+    ensure_date_in_academic_year(db, u.school_id, data.attendance_date)
     ensure_working_day(db, u.school_id, data.attendance_date)
     validate_and_get_ids(data, db, u)
 
@@ -283,11 +302,19 @@ def edit(
 
     existing = {row.student_id: row for row in existing_rows}
     updates = []
+    inserts = []
     history = []
 
     for r in data.records:
         old = existing.get(r.student_id)
-        if old and old.status != r.status:
+        if old is None:
+            inserts.append({
+                "student_id": r.student_id,
+                "academic_year_id": sess.academic_year_id,
+                "attendance_date": data.attendance_date,
+                "status": r.status,
+            })
+        elif old.status != r.status:
             updates.append({"id": old.id, "status": r.status})
             history.append(
                 {
@@ -300,13 +327,17 @@ def edit(
                 }
             )
 
-    changed = len(updates)
+    changed = len(updates) + len(inserts)
     if not changed:
         raise HTTPException(400, "No attendance status was changed")
 
     try:
-        db.bulk_update_mappings(models.Attendance, updates)
-        db.bulk_insert_mappings(models.AttendanceHistory, history)
+        if updates:
+            db.bulk_update_mappings(models.Attendance, updates)
+        if inserts:
+            db.bulk_insert_mappings(models.Attendance, inserts)
+        if history:
+            db.bulk_insert_mappings(models.AttendanceHistory, history)
 
         sess.edit_count += 1
         sess.is_locked = sess.edit_count >= 6

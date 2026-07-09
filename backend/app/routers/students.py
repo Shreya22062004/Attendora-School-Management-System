@@ -1,6 +1,7 @@
 from fastapi import APIRouter,Depends,HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_,func,case
+from datetime import date
 from typing import List
 from ..database import get_db
 from .. import models,schemas
@@ -67,11 +68,39 @@ def update(student_id:int,data:schemas.StudentUpdate,u=Depends(require_school_us
  s=db.query(models.Student).filter(models.Student.id==student_id,models.Student.school_id==u.school_id).first()
  if not s:raise HTTPException(404,'Student not found')
  g,a,p=validate(data,db,u.school_id,student_id);s.name=data.name.strip();s.class_name=data.class_name;s.section=data.section;s.stream=data.stream;s.gender=g;s.admission_no=a;s.pen_number=p;s.father_name=clean(data.father_name);s.mother_name=clean(data.mother_name);s.date_of_birth=data.date_of_birth;s.category=clean(data.category);s.admission_date=data.admission_date;s.is_active=data.is_active;db.commit();db.refresh(s);return s
+
 @router.delete('/{student_id}')
-def delete(student_id:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
- s=db.query(models.Student).filter(models.Student.id==student_id,models.Student.school_id==u.school_id).first()
- if not s:raise HTTPException(404,'Student not found')
- s.is_active=False;db.commit();return {'message':'Student deactivated'}
+def delete(
+    student_id:int,
+    exit_date:date,
+    u=Depends(require_school_user),
+    db:Session=Depends(get_db)
+):
+    s=db.query(models.Student).filter(
+        models.Student.id==student_id,
+        models.Student.school_id==u.school_id
+    ).first()
+
+    if not s:
+        raise HTTPException(404,'Student not found')
+
+    if s.admission_date and exit_date < s.admission_date:
+        raise HTTPException(
+            400,
+            'Exit date cannot be before admission date'
+        )
+
+    s.is_active=False
+    s.exit_status='Removed'
+    s.exit_date=exit_date
+    s.exit_reason='Student removed from active school register'
+
+    db.commit()
+
+    return {
+        'message':'Student deactivated successfully',
+        'exit_date':str(exit_date)
+    }
 @router.get('/stats/categories')
 def stats(u=Depends(require_school_user),db:Session=Depends(get_db)):
  rows=db.query(models.Student.category,func.count(models.Student.id)).filter(models.Student.school_id==u.school_id,models.Student.is_active==True).group_by(models.Student.category).all(); merged={}

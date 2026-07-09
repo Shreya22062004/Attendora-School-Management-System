@@ -22,7 +22,7 @@ def create_token(user):
             "user_id": user.id,
             "school_id": user.school_id,
             "role": user.role,
-            "exp": datetime.utcnow() + timedelta(hours=12),
+            "exp": datetime.utcnow() + timedelta(days=7),
         },
         SECRET_KEY,
         algorithm=ALGORITHM,
