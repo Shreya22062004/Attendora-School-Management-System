@@ -10,6 +10,8 @@ from ..models import (
     School,
     SchoolConfig,
     TeacherAssignment,
+    AttendanceSession,
+    AttendanceHistory,
     AuditLog,
 )
 from ..schemas import (
@@ -755,3 +757,93 @@ def update_teacher_assignments(
     return {
         "message": "Teacher class assignments updated"
     }
+
+@router.delete("/teachers/{user_id}")
+def delete_teacher(
+    user_id: int,
+    u: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if u.role != "school_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="School admin required",
+        )
+
+    teacher = (
+        db.query(User)
+        .filter_by(
+            id=user_id,
+            school_id=u.school_id,
+            role="teacher",
+        )
+        .first()
+    )
+
+    if not teacher:
+        raise HTTPException(
+            status_code=404,
+            detail="Teacher not found",
+        )
+
+    username = teacher.username
+
+    # Preserve attendance and audit history while removing references
+    # that would otherwise prevent deletion of the teacher account.
+    (
+        db.query(AttendanceSession)
+        .filter(AttendanceSession.created_by == teacher.id)
+        .update(
+            {AttendanceSession.created_by: None},
+            synchronize_session=False,
+        )
+    )
+
+    (
+        db.query(AttendanceHistory)
+        .filter(AttendanceHistory.edited_by == teacher.id)
+        .update(
+            {AttendanceHistory.edited_by: None},
+            synchronize_session=False,
+        )
+    )
+
+    (
+        db.query(AuditLog)
+        .filter(AuditLog.user_id == teacher.id)
+        .update(
+            {AuditLog.user_id: None},
+            synchronize_session=False,
+        )
+    )
+
+    (
+        db.query(TeacherAssignment)
+        .filter(
+            TeacherAssignment.user_id == teacher.id,
+            TeacherAssignment.school_id == u.school_id,
+        )
+        .delete(synchronize_session=False)
+    )
+
+    db.delete(teacher)
+
+    db.add(
+        AuditLog(
+            school_id=u.school_id,
+            user_id=u.id,
+            action="DELETE_TEACHER",
+            entity_type="Teacher",
+            entity_id=str(user_id),
+            old_value=json.dumps(
+                {"username": username}
+            ),
+        )
+    )
+
+    db.commit()
+
+    return {
+        "message": f"Teacher {username} deleted successfully"
+    }
+
