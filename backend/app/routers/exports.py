@@ -93,9 +93,14 @@ def date_group_gender_totals(db, sid, year, month):
 
  out=[]
  for current in attendance_dates:
+  grand_girls=0
+  grand_boys=0
   for g in normalized_groups:
    c=counts.get((current,g['name']),{'girls':0,'boys':0})
    out.append({'date':current,'group_name':g['name'],'girls_present':c['girls'],'boys_present':c['boys']})
+   grand_girls += c['girls']
+   grand_boys += c['boys']
+  out.append({'date':current,'group_name':'GRAND TOTAL','girls_present':grand_girls,'boys_present':grand_boys})
  return out
 
 def add_date_group_sheet(wb,db,sid,year,month):
