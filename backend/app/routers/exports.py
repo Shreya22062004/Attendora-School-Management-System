@@ -48,29 +48,54 @@ def summary_sheet(wb,db,sid,start,end,title):
 def date_group_gender_totals(db, sid, year, month):
  start=date(year,month,1); end=date(year,month,monthrange(year,month)[1])
  cfg=db.query(SchoolConfig).filter(SchoolConfig.school_id==sid).first()
+ classes=json.loads(cfg.classes_json or '[]') if cfg else []
  groups=json.loads(cfg.dashboard_groups_json or '[]') if cfg else []
- if not groups:
-  classes=sorted({r[0] for r in db.query(Student.class_name).filter(Student.school_id==sid).all()},key=lambda x:CLASS_ORDER.get(str(x),99))
-  groups=[{'name':str(c),'classes':[c]} for c in classes]
+
+ # Use the same group fallback as the dashboard.
+ if not groups or (len(groups)==1 and groups[0].get('name')=='All Classes'):
+  groups=[
+   {'name':'UKG/KG2/PP1','classes':[c for c in classes if str(c)=='UKG/KG2/PP1']},
+   {'name':'Classes 1 to 5','classes':[c for c in classes if str(c) in ['1','2','3','4','5']]},
+   {'name':'Classes 6 to 8','classes':[c for c in classes if str(c) in ['6','7','8']]},
+  ]
+  groups=[g for g in groups if g['classes']]
+
+ # Normalize configured class values to strings before matching.
+ normalized_groups=[]
+ for g in groups:
+  normalized_groups.append({
+   'name':g.get('name') or 'Group',
+   'classes':{str(c).strip() for c in (g.get('classes') or [])}
+  })
+
  rows=(db.query(Attendance.attendance_date,Student.class_name,Student.gender,Attendance.status)
        .join(Student,Attendance.student_id==Student.id)
        .filter(Student.school_id==sid,Attendance.attendance_date.between(start,end))
        .all())
+
+ # Show only dates that actually have attendance records.
+ attendance_dates=sorted({r.attendance_date for r in rows})
  counts={}
  for r in rows:
-  if r.status!='Present': continue
-  for g in groups:
-   if r.class_name in (g.get('classes') or []):
-    key=(r.attendance_date,g.get('name') or 'Group')
-    if key not in counts: counts[key]={'girls':0,'boys':0}
-    if r.gender=='Girl': counts[key]['girls']+=1
-    elif r.gender=='Boy': counts[key]['boys']+=1
+  if str(r.status).strip().lower()!='present':
+   continue
+  student_class=str(r.class_name).strip()
+  gender=str(r.gender or '').strip().lower()
+  for g in normalized_groups:
+   if student_class in g['classes']:
+    key=(r.attendance_date,g['name'])
+    if key not in counts:
+     counts[key]={'girls':0,'boys':0}
+    if gender in ('girl','female'):
+     counts[key]['girls']+=1
+    elif gender in ('boy','male'):
+     counts[key]['boys']+=1
+
  out=[]
- for d in range(1,monthrange(year,month)[1]+1):
-  current=date(year,month,d)
-  for g in groups:
-   name=g.get('name') or 'Group'; c=counts.get((current,name),{'girls':0,'boys':0})
-   out.append({'date':current,'group_name':name,'girls_present':c['girls'],'boys_present':c['boys']})
+ for current in attendance_dates:
+  for g in normalized_groups:
+   c=counts.get((current,g['name']),{'girls':0,'boys':0})
+   out.append({'date':current,'group_name':g['name'],'girls_present':c['girls'],'boys_present':c['boys']})
  return out
 
 def add_date_group_sheet(wb,db,sid,year,month):
