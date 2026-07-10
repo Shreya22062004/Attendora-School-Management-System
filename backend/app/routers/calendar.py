@@ -12,7 +12,7 @@ def days(year:int,month:int,u=Depends(require_school_user),db:Session=Depends(ge
 @router.post('')
 def save(data:schemas.CalendarDayCreate,u=Depends(require_school_user),db:Session=Depends(get_db)):
  if u.role!='school_admin': raise HTTPException(403,'School admin required')
- allowed={'Declared Holiday','Local Holiday','Examination','Summer Vacation','Emergency Closure','Working Day','Sunday'}
+ allowed={'Declared Holiday','Local Holiday','Holiday List','Examination','Summer Vacation','Emergency Closure','Working Day','Sunday'}
  if data.day_type not in allowed: raise HTTPException(400,'Invalid day type')
  end=data.end_date or data.start_date
  if end<data.start_date: raise HTTPException(400,'End date cannot be before start date')

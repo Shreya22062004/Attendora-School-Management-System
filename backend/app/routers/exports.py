@@ -1,6 +1,7 @@
 from io import BytesIO
 from datetime import date
 from calendar import monthrange,month_name
+import json
 from fastapi import APIRouter,Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spac
 from reportlab.lib.styles import getSampleStyleSheet
 from ..database import get_db
 from ..auth import require_school_user
-from ..models import School,Student
+from ..models import School,Student,Attendance,SchoolConfig
 from .reports import summary_query,studentwise_query,monthly_matrix,yearly_matrix,day_status
 router=APIRouter(prefix='/exports',tags=['Exports'])
 CLASS_ORDER={'UKG/KG2/PP1':0, **{str(i):i for i in range(1,13)}}
@@ -44,6 +45,44 @@ def pdf_head(story,s,title):
 def summary_sheet(wb,db,sid,start,end,title):
  s=school(db,sid);ws=wb.active;ws.title='Attendance Summary';hdr(ws,s,title);ws.append([]);ws.append(['Class','Boys Present','Girls Present','Total Present','Absent','Marked','Boys Strength','Girls Strength','Total Strength'])
  for r in summary_query(db,sid,start,end):ws.append([r['class_name'],r['boys_present'],r['girls_present'],r['total_present'],r['total_absent'],r['total_marked'],r['boys_total'],r['girls_total'],r['total_students']])
+def date_group_gender_totals(db, sid, year, month):
+ start=date(year,month,1); end=date(year,month,monthrange(year,month)[1])
+ cfg=db.query(SchoolConfig).filter(SchoolConfig.school_id==sid).first()
+ groups=json.loads(cfg.dashboard_groups_json or '[]') if cfg else []
+ if not groups:
+  classes=sorted({r[0] for r in db.query(Student.class_name).filter(Student.school_id==sid).all()},key=lambda x:CLASS_ORDER.get(str(x),99))
+  groups=[{'name':str(c),'classes':[c]} for c in classes]
+ rows=(db.query(Attendance.attendance_date,Student.class_name,Student.gender,Attendance.status)
+       .join(Student,Attendance.student_id==Student.id)
+       .filter(Student.school_id==sid,Attendance.attendance_date.between(start,end))
+       .all())
+ counts={}
+ for r in rows:
+  if r.status!='Present': continue
+  for g in groups:
+   if r.class_name in (g.get('classes') or []):
+    key=(r.attendance_date,g.get('name') or 'Group')
+    if key not in counts: counts[key]={'girls':0,'boys':0}
+    if r.gender=='Girl': counts[key]['girls']+=1
+    elif r.gender=='Boy': counts[key]['boys']+=1
+ out=[]
+ for d in range(1,monthrange(year,month)[1]+1):
+  current=date(year,month,d)
+  for g in groups:
+   name=g.get('name') or 'Group'; c=counts.get((current,name),{'girls':0,'boys':0})
+   out.append({'date':current,'group_name':name,'girls_present':c['girls'],'boys_present':c['boys']})
+ return out
+
+def add_date_group_sheet(wb,db,sid,year,month):
+ ws=wb.create_sheet('Date Group Gender Totals')
+ hdr(ws,school(db,sid),f'Date-wise Group-wise Gender Present Totals - {month_name[month]} {year}')
+ ws.append([])
+ ws.append(['Date','Group','Girls Present','Boys Present'])
+ for r in date_group_gender_totals(db,sid,year,month):
+  ws.append([r['date'].isoformat(),r['group_name'],r['girls_present'],r['boys_present']])
+ ws.column_dimensions['A'].width=15;ws.column_dimensions['B'].width=28;ws.column_dimensions['C'].width=16;ws.column_dimensions['D'].width=16
+ ws.freeze_panes='A7'
+
 def student_sheet(wb,db,sid,start,end):
  ws=wb.create_sheet('Student-wise Attendance');s=school(db,sid);hdr(ws,s,'Student-wise Attendance');ws.append([]);ws.append(['Class','Student Name','Gender','Present','Absent','Working Days','Attendance %'])
  for r in studentwise_query(db,sid,start,end):ws.append([r['class_name'],r['student_name'],r['gender'],r['present'],r['absent'],r['total_marked_days'],r['percentage']])
@@ -110,6 +149,7 @@ def monthly_x(year:int,month:int,u=Depends(require_school_user),db:Session=Depen
  for r in monthly_matrix(db,u.school_id,year,month):ws.append([r['class_name'],r['student_name'],r['gender']]+r['days']+[r['present'],r['absent'],r['working_days'],r['percentage']])
  set_attendance_excel_widths(ws, 'monthly', last)
  ws.freeze_panes = 'D7'
+ add_date_group_sheet(wb,db,u.school_id,year,month)
  return xlsx_response(wb, f'monthly-{year}-{month:02d}.xlsx')
 @router.get('/yearly.xlsx')
 def yearly_x(year:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
@@ -129,7 +169,19 @@ def daily_p(report_date:date,u=Depends(require_school_user),db:Session=Depends(g
  s=school(db,u.school_id);story=[];pdf_head(story,s,f'Daily Attendance Report - {report_date}');st=day_status(db,u.school_id,report_date);story.append(Paragraph(f"Day Status: {st['day_status']} - {st['reason']}",getSampleStyleSheet()['Heading2']));rows=[['Class','Boys P','Girls P','Present','Absent','Marked','Boys Str','Girls Str','Strength']]+[[r['class_name'],r['boys_present'],r['girls_present'],r['total_present'],r['total_absent'],r['total_marked'],r['boys_total'],r['girls_total'],r['total_students']] for r in summary_query(db,u.school_id,report_date,report_date)];t=Table(rows,repeatRows=1);style_table(t);story.append(t);story += [PageBreak()];pdf_head(story,s,'Student-wise Daily Attendance');sw=[['Class','Student Name','Gender','Present','Absent','Marked','%']]+[[r['class_name'],r['student_name'],r['gender'],r['present'],r['absent'],r['total_marked_days'],r['percentage']] for r in studentwise_query(db,u.school_id,report_date,report_date)];tt=Table(sw,repeatRows=1);style_table(tt);story.append(tt);return pdf_response(story,f'daily-{report_date}.pdf')
 @router.get('/monthly.pdf')
 def monthly_p(year:int,month:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
- start=date(year,month,1);end=date(year,month,monthrange(year,month)[1]);m=monthly_matrix(db,u.school_id,year,month);last=monthrange(year,month)[1];headers=['Class','Student Name','Gender']+[str(i) for i in range(1,last+1)]+['P','A','Marked','%'];rows=[[r['class_name'],r['student_name'],r['gender']]+r['days']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m];return report_pdf(db,u.school_id,start,end,f'Monthly Attendance Report - {month_name[month]} {year}',f'monthly-{year}-{month:02d}.pdf',rows,('Date-wise Attendance Register',headers))
+ start=date(year,month,1);end=date(year,month,monthrange(year,month)[1]);m=monthly_matrix(db,u.school_id,year,month);last=monthrange(year,month)[1]
+ headers=['Class','Student Name','Gender']+[str(i) for i in range(1,last+1)]+['P','A','Marked','%']
+ rows=[[r['class_name'],r['student_name'],r['gender']]+r['days']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m]
+ s_obj=school(db,u.school_id);story=[];pdf_head(story,s_obj,f'Monthly Attendance Report - {month_name[month]} {year}')
+ summary_rows=[['Class','Boys P','Girls P','Present','Absent','Marked','Boys Str','Girls Str','Strength']]+[[r['class_name'],r['boys_present'],r['girls_present'],r['total_present'],r['total_absent'],r['total_marked'],r['boys_total'],r['girls_total'],r['total_students']] for r in summary_query(db,u.school_id,start,end)]
+ t=Table(summary_rows,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s_obj,'Student-wise Attendance')
+ sw=[['Class','Student Name','Gender','Present','Absent','Marked','%']]+[[r['class_name'],r['student_name'],r['gender'],r['present'],r['absent'],r['total_marked_days'],r['percentage']] for r in studentwise_query(db,u.school_id,start,end)]
+ t=Table(sw,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s_obj,'Date-wise Attendance Register')
+ t=Table([headers]+rows,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s_obj,'Date-wise Group-wise Gender Present Totals')
+ group_rows=[['Date','Group','Girls Present','Boys Present']]+[[r['date'].isoformat(),r['group_name'],r['girls_present'],r['boys_present']] for r in date_group_gender_totals(db,u.school_id,year,month)]
+ t=Table(group_rows,repeatRows=1);style_table(t);story.append(t)
+ return pdf_response(story,f'monthly-{year}-{month:02d}.pdf',landscape(A3))
+
 @router.get('/yearly.pdf')
 def yearly_p(year:int,u=Depends(require_school_user),db:Session=Depends(get_db)):
  start=date(year,4,1);end=date(year+1,3,31);label=f'{year}-{str(year+1)[-2:]}';months=list(range(4,13))+list(range(1,4));m=yearly_matrix(db,u.school_id,year);headers=['Class','Student Name','Gender']+[month_name[i][:3] for i in months]+['P','A','Marked','%'];rows=[[r['class_name'],r['student_name'],r['gender']]+r['months']+[r['present'],r['absent'],r['working_days'],r['percentage']] for r in m];return report_pdf(db,u.school_id,start,end,f'Yearly Attendance Report - {label}',f'yearly-{year}-{year+1}.pdf',rows,('Month-wise Attendance Register',headers))
