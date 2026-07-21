@@ -16,6 +16,7 @@ from ..database import get_db
 from ..auth import require_school_user
 from ..models import School,Student,Attendance,SchoolConfig
 from .reports import summary_query,studentwise_query,monthly_matrix,yearly_matrix,day_status
+from collections import defaultdict
 router=APIRouter(prefix='/exports',tags=['Exports'])
 CLASS_ORDER={'UKG/KG2/PP1':0, **{str(i):i for i in range(1,13)}}
 GENDER_ORDER={'Girl':0,'Boy':1}
@@ -103,6 +104,164 @@ def date_group_gender_totals(db, sid, year, month):
   out.append({'date':current,'group_name':'GRAND TOTAL','girls_present':grand_girls,'boys_present':grand_boys})
  return out
 
+def classwise_category_summary(db, sid):
+    from collections import defaultdict
+
+    rows = (
+        db.query(
+            Student.class_name,
+            Student.category,
+            Student.gender
+        )
+        .filter(
+            Student.school_id == sid,
+            Student.is_active == True
+        )
+        .all()
+    )
+
+    CATEGORY_MAP = {
+        "SC": "SC",
+        "ST": "ST",
+        "OBC": "OBC",
+        "GENERAL": "GENERAL"
+    }
+
+    result = defaultdict(
+        lambda: defaultdict(
+            lambda: {"boys": 0, "girls": 0}
+        )
+    )
+
+    for r in rows:
+        cls = str(r.class_name)
+
+        cat = CATEGORY_MAP.get(
+            (r.category or "GENERAL").strip().upper(),
+            "GENERAL"
+        )
+
+        gender = (r.gender or "").strip().lower()
+
+        if gender in ("boy", "male"):
+            result[cls][cat]["boys"] += 1
+        elif gender in ("girl", "female"):
+            result[cls][cat]["girls"] += 1
+
+    return result
+
+def add_classwise_category_sheet(wb, db, sid):
+
+    ws = wb.create_sheet("Classwise Category Summary")
+
+    s = school(db, sid)
+
+    hdr(ws, s, "Classwise Category Summary")
+
+    ws.append([])
+
+    categories = [
+        "SC",
+        "ST",
+        "OBC",
+        "GENERAL"
+    ]
+
+    row1 = ["Class"]
+
+    for c in categories:
+        row1.extend([c, "", ""])
+
+    ws.append(row1)
+
+    row2 = [""]
+
+    for _ in categories:
+        row2.extend(["Boys", "Girls", "Total"])
+
+    ws.append(row2)
+
+    summary = classwise_category_summary(db, sid)
+
+    class_order = [
+        "UKG/KG2/PP1",
+        "1","2","3","4","5",
+        "6","7","8",
+        "9","10","11","12"
+    ]
+
+    grand = defaultdict(int)
+
+    for cls in class_order:
+
+        row = [cls]
+
+        total_boys = 0
+        total_girls = 0
+
+        for cat in categories:
+
+            boys = summary[cls][cat]["boys"]
+            girls = summary[cls][cat]["girls"]
+            total = boys + girls
+
+            row.extend([boys, girls, total])
+
+            total_boys += boys
+            total_girls += girls
+
+            grand[(cat, "boys")] += boys
+            grand[(cat, "girls")] += girls
+
+        row.extend([
+            total_boys,
+            total_girls,
+            total_boys + total_girls
+        ])
+
+        ws.append(row)
+
+    total_row = ["GRAND TOTAL"]
+
+    grand_boys = 0
+    grand_girls = 0
+
+    for cat in categories:
+
+        b = grand[(cat, "boys")]
+        g = grand[(cat, "girls")]
+
+        total_row.extend([
+            b,
+            g,
+            b + g
+        ])
+
+        grand_boys += b
+        grand_girls += g
+
+    total_row.extend([
+        grand_boys,
+        grand_girls,
+        grand_boys + grand_girls
+    ])
+
+    ws.append(total_row)
+
+    from openpyxl.utils import get_column_letter
+
+    for column in range(1, ws.max_column + 1):
+        max_length = 0
+
+        for row in range(1, ws.max_row + 1):
+            value = ws.cell(row=row, column=column).value
+            if value is not None:
+                max_length = max(max_length, len(str(value)))
+
+        ws.column_dimensions[
+            get_column_letter(column)
+        ].width = max_length + 3
+        
 def add_date_group_sheet(wb,db,sid,year,month):
  ws=wb.create_sheet('Date Group Gender Totals')
  hdr(ws,school(db,sid),f'Date-wise Group-wise Gender Present Totals - {month_name[month]} {year}')
@@ -375,7 +534,13 @@ def students_x(
     ws2.auto_filter.ref = (
         f'A6:J{ws2.max_row}'
     )
-
+    
+    add_classwise_category_sheet(
+        wb,
+        db,
+        u.school_id
+    )
+    
     return xlsx_response(
         wb,
         'student-directory.xlsx'
