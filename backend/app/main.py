@@ -47,7 +47,8 @@ def seed():
    db.add(SchoolConfig(school_id=school.id,classes_json=json.dumps(['UKG/KG2/PP1','1','2','3','4','5','6','7','8']),fields_json=json.dumps({'name':{'visible':True,'required':True},'class_name':{'visible':True,'required':True},'gender':{'visible':True,'required':True},'admission_no':{'visible':True,'required':False},'pen_number':{'visible':True,'required':False},'father_name':{'visible':True,'required':False},'mother_name':{'visible':True,'required':False},'date_of_birth':{'visible':True,'required':False},'category':{'visible':True,'required':False},'admission_date':{'visible':True,'required':False}})))
   db.commit()
  finally:db.close()
-seed();app=FastAPI(title='Multi-School Attendance System');origins=['http://localhost:5173','http://127.0.0.1:5173'];origins += [x.strip() for x in os.getenv('CORS_ORIGINS','').split(',') if x.strip()];app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
+# seed();
+app=FastAPI(title='Multi-School Attendance System');origins=['http://localhost:5173','http://127.0.0.1:5173'];origins += [x.strip() for x in os.getenv('CORS_ORIGINS','').split(',') if x.strip()];app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 for r in [auth.router,settings.router,students.router,attendance.router,reports.router,calendar.router,exports.router,backup.router,academic.router]:app.include_router(r)
 @app.get('/')
 def root():return {'message':'Multi-School Attendance API is running'}
