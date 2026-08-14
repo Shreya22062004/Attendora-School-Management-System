@@ -489,7 +489,7 @@ def _draw_card(pdf, student, school, x: float, y: float):
     # Clean signature, no surrounding box.
     signature_path = _file_path(school.headmaster_signature)
     signature_w, signature_h = 38 * mm, 16.0 * mm
-    signature_x = x + CARD_WIDTH - signature_w - 1.5 * mm
+    signature_x = x + CARD_WIDTH - signature_w - 1.0 * mm
     signature_y = y + 3.8 * mm
     if signature_path:
         _draw_image_or_placeholder(
