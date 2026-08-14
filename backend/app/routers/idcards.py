@@ -20,15 +20,18 @@ from ..database import get_db
 
 router = APIRouter(prefix="/idcards", tags=["ID Cards"])
 
-# A3-size plastic ID-card format from the supplied reference:
-# 92 mm wide x 115 mm high (portrait).
-CARD_WIDTH = 92 * mm
-CARD_HEIGHT = 115 * mm
+# Final school ID-card format: 85 mm wide x 110 mm high (portrait).
+CARD_WIDTH = 85 * mm
+CARD_HEIGHT = 110 * mm
 
-# A4 print sheet: 2 columns x 2 rows, with a small cutting gap on all sides.
-CUT_GAP = 5 * mm
-PAGE_MARGIN_X = (A4[0] - (2 * CARD_WIDTH) - CUT_GAP) / 2
-PAGE_MARGIN_Y = (A4[1] - (2 * CARD_HEIGHT) - CUT_GAP) / 2
+# A4 portrait print sheet: 2 columns x 2 rows. A small, consistent cutting gap
+# is maintained between cards and around the outside edges.
+CARDS_PER_ROW = 2
+CARDS_PER_COLUMN = 2
+CARDS_PER_SHEET = CARDS_PER_ROW * CARDS_PER_COLUMN
+CUT_GAP = 4 * mm
+PAGE_MARGIN_X = (A4[0] - (CARDS_PER_ROW * CARD_WIDTH) - ((CARDS_PER_ROW - 1) * CUT_GAP)) / 2
+PAGE_MARGIN_Y = (A4[1] - (CARDS_PER_COLUMN * CARD_HEIGHT) - ((CARDS_PER_COLUMN - 1) * CUT_GAP)) / 2
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "idcards"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -150,16 +153,39 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
     return {"message": "Headmaster signature saved"}
 
 
+def _trim_image_bytes(path: Path) -> bytes:
+    """Return a tightly cropped PNG for signatures, removing surrounding white margins."""
+    image = Image.open(path).convert("RGBA")
+    rgb = image.convert("RGB")
+    # Treat near-white pixels as background so the actual signature/stamp remains.
+    mask = rgb.point(lambda p: 0 if p >= 245 else 255)
+    bbox = mask.getbbox()
+    if bbox:
+        pad = max(4, int(min(image.size) * 0.025))
+        bbox = (
+            max(0, bbox[0] - pad),
+            max(0, bbox[1] - pad),
+            min(image.width, bbox[2] + pad),
+            min(image.height, bbox[3] + pad),
+        )
+        image = image.crop(bbox)
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 @router.get("/settings/signature")
 def get_signature(user=Depends(require_school_user), db: Session = Depends(get_db)):
     school = db.get(models.School, user.school_id)
     path = _file_path(school.headmaster_signature if school else None)
     if not path:
         raise HTTPException(404, "Headmaster signature not uploaded")
-    return Response(
-        path.read_bytes(),
-        media_type="image/png" if path.suffix == ".png" else "image/jpeg",
-    )
+    try:
+        # Serve the same tightly cropped signature used by the PDF renderer so the
+        # browser preview does not show the large blank margins from the upload.
+        return Response(_trim_image_bytes(path), media_type="image/png")
+    except Exception:
+        return Response(path.read_bytes(), media_type="image/png" if path.suffix == ".png" else "image/jpeg")
 
 
 @router.get("/students")
@@ -299,47 +325,45 @@ def _draw_image_or_placeholder(
 
     if frame:
         pdf.setFillColor(colors.HexColor("#cbd5e1"))
-        pdf.setFont("Helvetica-Bold", 6.2)
+        pdf.setFont("Helvetica-Bold", 6.8)
         pdf.drawCentredString(x + width / 2, y + height / 2 - 2, label)
 
 
 def _draw_card(pdf, student, school, x: float, y: float):
-    # A3 portrait reference-style design: compact school header, separated identity title,
-    # large photo, prominent student name, clean detail rows, and signature above HEADMASTER.
-    navy = colors.HexColor("#174f82")
-    blue = colors.HexColor("#3a82b8")
-    light_blue = colors.HexColor("#eaf4fb")
-    line_blue = colors.HexColor("#5b9dcc")
-    ink = colors.HexColor("#24415e")
-    muted = colors.HexColor("#60758a")
+    """Draw an 85 x 110 mm portrait school ID card."""
+    navy = colors.HexColor("#2d6f9f")
+    blue = colors.HexColor("#4b93c4")
+    light_blue = colors.HexColor("#e8f4fb")
+    pale_blue = colors.HexColor("#f5faff")
+    line_blue = colors.HexColor("#6ba7cf")
+    ink = colors.HexColor("#28445d")
 
-    # Outer card and inner print-safe border.
+    # Card shell.
     pdf.setFillColor(colors.white)
-    pdf.setStrokeColor(navy)
-    pdf.setLineWidth(1.0)
-    pdf.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 2.2 * mm, fill=1, stroke=1)
-    pdf.setStrokeColor(colors.HexColor("#6b8db6"))
-    pdf.setLineWidth(0.45)
-    pdf.roundRect(x + 1.4 * mm, y + 1.4 * mm, CARD_WIDTH - 2.8 * mm, CARD_HEIGHT - 2.8 * mm, 1.3 * mm, fill=0, stroke=1)
+    pdf.setStrokeColor(colors.HexColor("#2b6090"))
+    pdf.setLineWidth(0.9)
+    pdf.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 2.3 * mm, fill=1, stroke=1)
+    pdf.setStrokeColor(colors.HexColor("#8db9d8"))
+    pdf.setLineWidth(0.35)
+    pdf.roundRect(x + 1.3 * mm, y + 1.3 * mm, CARD_WIDTH - 2.6 * mm, CARD_HEIGHT - 2.6 * mm, 1.5 * mm, fill=0, stroke=1)
 
-    left = x + 2.2 * mm
-    right = x + CARD_WIDTH - 2.2 * mm
+    left = x + 2.5 * mm
+    right = x + CARD_WIDTH - 2.5 * mm
     center = x + CARD_WIDTH / 2
 
-    # Header: strong navy block like the user's sample, but cleaner and more compact.
-    header_h = 25.5 * mm
+    # Header.
+    header_h = 27 * mm
     header_y = y + CARD_HEIGHT - header_h
     pdf.setFillColor(navy)
-    pdf.roundRect(left, header_y, right - left, header_h, 1.5 * mm, fill=1, stroke=0)
+    pdf.roundRect(left, header_y, right - left, header_h, 1.7 * mm, fill=1, stroke=0)
 
     school_name = (school.school_name or "SCHOOL NAME").upper()
-    # Wrap long school names to two lines without overflowing the card.
     words = school_name.split()
     lines = []
     current = ""
     for word in words:
         candidate = f"{current} {word}".strip()
-        if pdf.stringWidth(candidate, "Helvetica-Bold", 8.6) <= 82 * mm:
+        if pdf.stringWidth(candidate, "Helvetica-Bold", 12.0) <= 76 * mm:
             current = candidate
         else:
             if current:
@@ -350,165 +374,147 @@ def _draw_card(pdf, student, school, x: float, y: float):
     lines = lines[:2]
 
     pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 8.6)
-    name_y = y + CARD_HEIGHT - 7.0 * mm
+    pdf.setFont("Helvetica-Bold", 12.0)
+    title_y = y + CARD_HEIGHT - 6.2 * mm
     for line in lines:
-        pdf.drawCentredString(center, name_y, line)
-        name_y -= 4.2 * mm
+        pdf.drawCentredString(center, title_y, line)
+        title_y -= 5.0 * mm
 
     if school.established_year:
-        pdf.setFont("Helvetica-Bold", 6.4)
-        pdf.drawCentredString(center, name_y, f"ESTD - {school.established_year}")
-        name_y -= 4.0 * mm
+        pdf.setFont("Helvetica-Bold", 8.0)
+        pdf.drawCentredString(center, title_y, f"ESTD - {school.established_year}")
+        title_y -= 4.3 * mm
 
     if school.address:
         address = str(school.address).upper()
-        # Keep the reference-style address compact; split once if needed.
-        if len(address) > 48:
-            split = address.rfind(" ", 0, 48)
-            split = split if split > 20 else 48
-            address_lines = [address[:split], address[split:].strip()]
-        else:
-            address_lines = [address]
-        pdf.setFont("Helvetica-Bold", 4.65)
+        address_words = address.split()
+        address_lines = []
+        current = ""
+        for word in address_words:
+            candidate = f"{current} {word}".strip()
+            if pdf.stringWidth(candidate, "Helvetica-Bold", 7.25) <= 76 * mm:
+                current = candidate
+            else:
+                if current:
+                    address_lines.append(current)
+                current = word
+        if current:
+            address_lines.append(current)
+        pdf.setFont("Helvetica-Bold", 7.15)
         for line in address_lines[:2]:
-            pdf.drawCentredString(center, name_y, line[:62])
-            name_y -= 3.0 * mm
+            pdf.drawCentredString(center, title_y, line)
+            title_y -= 3.35 * mm
 
     # UDISE pill.
-    pill_w, pill_h = 47 * mm, 5.2 * mm
-    pill_x = center - pill_w / 2
-    pill_y = header_y + 0.9 * mm
-    pdf.setFillColor(colors.white)
-    pdf.roundRect(pill_x, pill_y, pill_w, pill_h, 2.4 * mm, fill=1, stroke=0)
-    pdf.setFillColor(navy)
-    pdf.setFont("Helvetica-Bold", 5.6)
     udise_text = f"UDISE CODE - {school.udise_code}" if school.udise_code else "UDISE CODE"
-    pdf.drawCentredString(center, pill_y + 1.75 * mm, udise_text)
+    pill_w, pill_h = 45 * mm, 5.4 * mm
+    pill_x = center - pill_w / 2
+    pill_y = header_y + 1.1 * mm
+    pdf.setFillColor(colors.white)
+    pdf.roundRect(pill_x, pill_y, pill_w, pill_h, 2.2 * mm, fill=1, stroke=0)
+    pdf.setFillColor(navy)
+    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.drawCentredString(center, pill_y + 1.78 * mm, udise_text)
 
-    # Curved light-blue/blue transition under the header.
+    # Soft wave separating header from body.
     wave_y = header_y
     pdf.setFillColor(light_blue)
     wave = pdf.beginPath()
     wave.moveTo(left, wave_y + 1 * mm)
-    wave.curveTo(x + 25 * mm, wave_y - 5 * mm, x + 57 * mm, wave_y + 5 * mm, right, wave_y - 1 * mm)
-    wave.lineTo(right, wave_y - 6.5 * mm)
-    wave.curveTo(x + 59 * mm, wave_y - 1 * mm, x + 27 * mm, wave_y - 9 * mm, left, wave_y - 3 * mm)
+    wave.curveTo(x + 24 * mm, wave_y - 3.8 * mm, x + 55 * mm, wave_y + 3.5 * mm, right, wave_y - 1 * mm)
+    wave.lineTo(right, wave_y - 5.2 * mm)
+    wave.curveTo(x + 55 * mm, wave_y - 0.8 * mm, x + 25 * mm, wave_y - 6.2 * mm, left, wave_y - 2 * mm)
     wave.close()
     pdf.drawPath(wave, fill=1, stroke=0)
     pdf.setFillColor(blue)
     accent = pdf.beginPath()
-    accent.moveTo(left, wave_y + 0.5 * mm)
-    accent.curveTo(x + 22 * mm, wave_y - 2.5 * mm, x + 48 * mm, wave_y + 3.5 * mm, x + 64 * mm, wave_y - 1.5 * mm)
-    accent.lineTo(x + 64 * mm, wave_y - 3.2 * mm)
-    accent.curveTo(x + 44 * mm, wave_y + 1.5 * mm, x + 21 * mm, wave_y - 4.5 * mm, left, wave_y - 1.5 * mm)
+    accent.moveTo(left, wave_y + 0.3 * mm)
+    accent.curveTo(x + 24 * mm, wave_y - 2.2 * mm, x + 50 * mm, wave_y + 2.7 * mm, right, wave_y - 0.9 * mm)
+    accent.lineTo(right, wave_y - 2.5 * mm)
+    accent.curveTo(x + 48 * mm, wave_y + 1.1 * mm, x + 23 * mm, wave_y - 3.8 * mm, left, wave_y - 1.2 * mm)
     accent.close()
     pdf.drawPath(accent, fill=1, stroke=0)
 
-    # Large photo, deliberately integrated into the upper-middle area.
-    photo_w, photo_h = 50 * mm, 50 * mm
+    # Portrait body: large photo, student name, then details.
+    photo_w, photo_h = 52 * mm, 52 * mm
     photo_x = center - photo_w / 2
-    # Keep the photo bottom higher so the extra height grows upward, leaving a
-    # deliberate gap between the photo and the student name.
-    photo_y = y + CARD_HEIGHT - 76.0 * mm
+    photo_y = y + 45.0 * mm
     pdf.setFillColor(colors.white)
     pdf.setStrokeColor(line_blue)
     pdf.setLineWidth(0.8)
-    pdf.roundRect(photo_x - 1.2 * mm, photo_y - 1.2 * mm, photo_w + 2.4 * mm, photo_h + 2.4 * mm, 1.8 * mm, fill=1, stroke=1)
+    pdf.roundRect(photo_x - 1.0 * mm, photo_y - 1.0 * mm, photo_w + 2 * mm, photo_h + 2 * mm, 1.8 * mm, fill=1, stroke=1)
     _draw_image_or_placeholder(
-        pdf,
-        _file_path(student.photo),
-        photo_x,
-        photo_y,
-        photo_w,
-        photo_h,
-        "PHOTO PENDING",
-        cover=True,
-        frame=True,
+        pdf, _file_path(student.photo), photo_x, photo_y, photo_w, photo_h,
+        "PHOTO PENDING", cover=True, frame=True,
     )
 
-    # Student name: prominent, centered, like a finished plastic ID card.
     name_text = str(student.name or "").upper()
-    name_y = photo_y - 5.5 * mm
+    name_y = y + 40.7 * mm
     pdf.setFillColor(navy)
-    pdf.setFont("Helvetica-Bold", 8.4)
-    if len(name_text) > 27:
-        pdf.setFont("Helvetica-Bold", 7.4)
-    pdf.drawCentredString(center, name_y, name_text[:34])
+    pdf.setFont("Helvetica-Bold", 11.4 if len(name_text) <= 22 else 9.8)
+    pdf.drawCentredString(center, name_y, name_text[:30])
 
-    # Details use clean label/value rows with no horizontal rules.
-    rows = [
-        ("FATHER NAME", student.father_name),
-        ("MOTHER NAME", student.mother_name),
-    ]
+    # Student details below the name.
+    detail_left = x + 7.0 * mm
+    detail_right = x + 51.0 * mm
+    detail_value_x = x + 29.0 * mm
+    row_y = y + 35.0 * mm
+    row_h = 5.8 * mm
+    rows = [("FATHER NAME", student.father_name), ("MOTHER NAME", student.mother_name)]
     if student.pen_number:
         rows.append(("PEN NUMBER", student.pen_number))
     if student.date_of_birth:
         rows.append(("DATE OF BIRTH", student.date_of_birth.strftime("%d/%m/%Y")))
 
-    detail_left = x + 10 * mm
-    detail_value_x = x + 43 * mm
-    row_y = name_y - 6.0 * mm
-    row_h = 4.35 * mm
+    box_h = max(24.0, len(rows) * row_h + 3.5) * mm
+    box_y = y + 12.0 * mm
+    pdf.setFillColor(pale_blue)
+    pdf.roundRect(detail_left - 2.0 * mm, box_y, detail_right - detail_left + 4.0 * mm, box_h, 1.8 * mm, fill=1, stroke=0)
+    pdf.setStrokeColor(line_blue)
+    pdf.setLineWidth(0.8)
+    pdf.line(detail_left - 0.8 * mm, box_y + 1.0 * mm, detail_left - 0.8 * mm, box_y + box_h - 1.0 * mm)
 
     for label, value in rows:
         pdf.setFillColor(navy)
-        pdf.setFont("Helvetica-Bold", 5.45)
-        pdf.drawString(detail_left, row_y, f"{label} :")
+        pdf.setFont("Helvetica-Bold", 6.8)
+        pdf.drawString(detail_left, row_y, f"{label}:")
         pdf.setFillColor(ink)
-        pdf.setFont("Helvetica", 5.65)
+        pdf.setFont("Helvetica", 7.0)
         value_text = str(value or "-")
-        # Clip long values by shortening them, preserving the row geometry.
-        while len(value_text) > 28 and pdf.stringWidth(value_text, "Helvetica", 5.65) > 39 * mm:
+        while len(value_text) > 24 and pdf.stringWidth(value_text, "Helvetica", 7.0) > 38 * mm:
             value_text = value_text[:-1]
         pdf.drawString(detail_value_x, row_y, value_text)
         row_y -= row_h
 
-    # Compact signature block at bottom-right. Keep it clearly separated from the
-    # student details so the signature is visible without becoming oversized.
-    panel_w, panel_h = 28 * mm, 12.2 * mm
-    panel_x = right - panel_w - 1.5 * mm
-    panel_y = y + 2.8 * mm
-    pdf.setFillColor(colors.HexColor("#f4f9fd"))
-    pdf.setStrokeColor(colors.HexColor("#c6ddec"))
-    pdf.setLineWidth(0.45)
-    pdf.roundRect(panel_x, panel_y, panel_w, panel_h, 1.4 * mm, fill=1, stroke=1)
-
+    # Clean signature, no surrounding box.
     signature_path = _file_path(school.headmaster_signature)
-    signature_w, signature_h = 22 * mm, 5.8 * mm
-    signature_x = panel_x + (panel_w - signature_w) / 2
-    signature_y = panel_y + 4.6 * mm
+    signature_w, signature_h = 38 * mm, 16.0 * mm
+    signature_x = x + CARD_WIDTH - signature_w - 1.5 * mm
+    signature_y = y + 3.8 * mm
     if signature_path:
         _draw_image_or_placeholder(
-            pdf,
-            signature_path,
-            signature_x,
-            signature_y,
-            signature_w,
-            signature_h,
-            "",
-            cover=False,
-            frame=False,
+            pdf, signature_path, signature_x, signature_y + 1.8 * mm,
+            signature_w, signature_h, "", cover=False, frame=False,
         )
-
-    pdf.setStrokeColor(colors.HexColor("#6fa6cb"))
+    pdf.setStrokeColor(colors.HexColor("#5f93b7"))
     pdf.setLineWidth(0.45)
-    pdf.line(panel_x + 3.0 * mm, panel_y + 3.6 * mm, panel_x + panel_w - 3.0 * mm, panel_y + 3.6 * mm)
+    pdf.line(signature_x, signature_y + 1.0 * mm, signature_x + signature_w, signature_y + 1.0 * mm)
     pdf.setFillColor(navy)
-    pdf.setFont("Helvetica-Bold", 5.4)
-    pdf.drawCentredString(panel_x + panel_w / 2, panel_y + 1.25 * mm, "HEADMASTER")
-
+    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.drawCentredString(signature_x + signature_w / 2, y + 2.0 * mm, "HEADMASTER")
 
 def _pdf_response(students, school, filename: str):
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
+    pdf.setTitle("Attendora Student ID Cards - 85x110 mm Portrait")
 
     for index, student in enumerate(students):
-        slot = index % 4
+        slot = index % CARDS_PER_SHEET
         if slot == 0 and index:
             pdf.showPage()
 
-        column, row = slot % 2, slot // 2
+        column = slot % CARDS_PER_ROW
+        row = slot // CARDS_PER_ROW
         x = PAGE_MARGIN_X + column * (CARD_WIDTH + CUT_GAP)
         y = A4[1] - PAGE_MARGIN_Y - CARD_HEIGHT - row * (CARD_HEIGHT + CUT_GAP)
         _draw_card(pdf, student, school, x, y)

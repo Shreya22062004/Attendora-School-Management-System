@@ -129,7 +129,7 @@ export default function IDCards() {
       <div>
         <p className="eyebrow">STUDENT IDENTITY</p>
         <h1>ID Cards</h1>
-        <p className="muted">A3 portrait card • 92 × 115 mm • 4 cards per A4 sheet.</p>
+        <p className="muted">85 × 110 mm portrait card • 4 cards per A4 sheet.</p>
       </div>
       <button
         className="primary-btn"
@@ -141,6 +141,7 @@ export default function IDCards() {
       >
         {busy === "download" ? "Generating..." : "Download All ID Cards"}
       </button>
+      <span className="idcard-print-note">A4 PDF: choose <strong>Actual Size / 100%</strong> and turn off Fit / Shrink-to-page when printing.</span>
     </header>
 
     {message && <div className="alert">{message}</div>}
@@ -206,7 +207,7 @@ export default function IDCards() {
           <div>
             <h2>Print Design Preview</h2>
             <p className="muted">
-              A3 portrait card: 92 × 115 mm. Clean school branding, large photo, readable student details, and signature.
+              85 × 110 mm portrait card: 4 cards per A4 sheet • PDF prints at exact size (100% / Actual Size).
             </p>
           </div>
           <span className="badge">{previewStudent.name}</span>
