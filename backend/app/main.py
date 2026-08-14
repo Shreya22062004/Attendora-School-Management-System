@@ -3,12 +3,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base,engine,SessionLocal
 from .models import User,School,SchoolConfig
-from .routers import students,attendance,reports,calendar,auth,settings,exports,backup,academic
+from .routers import students,attendance,reports,calendar,auth,settings,exports,backup,academic,idcards
 Base.metadata.create_all(bind=engine)
 # Lightweight additive migration for existing PostgreSQL databases.
 # Production deployments should replace this with Alembic migrations.
 from sqlalchemy import text
 def additive_migrate():
+ # SQLite development/test databases are created from the current SQLAlchemy
+ # metadata above. PostgreSQL alone needs these production ALTER statements.
+ if engine.dialect.name == 'sqlite': return
  with engine.begin() as c:
   statements=[
    'ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE',
@@ -17,6 +20,9 @@ def additive_migrate():
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS father_name VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS mother_name VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS date_of_birth DATE',
+   'ALTER TABLE students ADD COLUMN IF NOT EXISTS photo VARCHAR',
+   'ALTER TABLE schools ADD COLUMN IF NOT EXISTS established_year VARCHAR',
+   'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_status VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_date DATE',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_reason VARCHAR',
@@ -49,7 +55,7 @@ def seed():
  finally:db.close()
 # seed();
 app=FastAPI(title='Multi-School Attendance System');origins=['http://localhost:5173','http://127.0.0.1:5173'];origins += [x.strip() for x in os.getenv('CORS_ORIGINS','').split(',') if x.strip()];app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
-for r in [auth.router,settings.router,students.router,attendance.router,reports.router,calendar.router,exports.router,backup.router,academic.router]:app.include_router(r)
+for r in [auth.router,settings.router,students.router,attendance.router,reports.router,calendar.router,exports.router,backup.router,academic.router,idcards.router]:app.include_router(r)
 @app.get('/')
 def root():return {'message':'Multi-School Attendance API is running'}
 @app.get('/health')
