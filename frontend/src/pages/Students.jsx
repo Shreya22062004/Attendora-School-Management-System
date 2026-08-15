@@ -18,6 +18,8 @@ const createBlankForm = () => ({
   pen_number: "",
   father_name: "",
   mother_name: "",
+  contact_number: "",
+  blood_group: "",
   date_of_birth: "",
   category: "",
   admission_date: ""
@@ -184,6 +186,10 @@ export default function Students() {
 
       mother_name:
         form.mother_name?.trim() || null,
+      contact_number:
+        form.contact_number?.trim() || null,
+      blood_group:
+        form.blood_group?.trim() || null,
       date_of_birth: form.date_of_birth || null,
 
       category:
@@ -276,6 +282,10 @@ export default function Students() {
 
       mother_name:
         student.mother_name || "",
+      contact_number:
+        student.contact_number || "",
+      blood_group:
+        student.blood_group || "",
       date_of_birth: student.date_of_birth || "",
 
       category:
@@ -653,6 +663,34 @@ export default function Students() {
             </label>
           )}
 
+          {isVisible("contact_number") && (
+            <label>
+              Contact Number
+              <input
+                type="tel"
+                value={form.contact_number}
+                required={isRequired("contact_number")}
+                onChange={(event) =>
+                  setForm({ ...form, contact_number: event.target.value })
+                }
+              />
+            </label>
+          )}
+
+          {isVisible("blood_group") && (
+            <label>
+              Blood Group
+              <input
+                placeholder="e.g. B+"
+                value={form.blood_group}
+                required={isRequired("blood_group")}
+                onChange={(event) =>
+                  setForm({ ...form, blood_group: event.target.value })
+                }
+              />
+            </label>
+          )}
+
           {isVisible("date_of_birth") && (
             <label>
               Date of Birth
@@ -864,6 +902,8 @@ export default function Students() {
                 {isVisible("pen_number") && <th>PEN Number</th>}
                 {isVisible("father_name") && <th>Father's Name</th>}
                 {isVisible("mother_name") && <th>Mother's Name</th>}
+                <th>Contact Number</th>
+                <th>Blood Group</th>
 
                 {isVisible("date_of_birth") && (
                   <>
@@ -926,6 +966,9 @@ export default function Students() {
                   {isVisible("mother_name") && (
                     <td>{student.mother_name || "—"}</td>
                   )}
+
+                  <td>{student.contact_number || "—"}</td>
+                  <td>{student.blood_group || "—"}</td>
 
                   {isVisible("date_of_birth") && (
                     <>

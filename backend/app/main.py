@@ -21,8 +21,14 @@ def additive_migrate():
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS mother_name VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS date_of_birth DATE',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS photo VARCHAR',
+   'ALTER TABLE students ADD COLUMN IF NOT EXISTS contact_number VARCHAR',
+   'ALTER TABLE students ADD COLUMN IF NOT EXISTS blood_group VARCHAR',
+   'ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_data BYTEA',
+   'ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_mime_type VARCHAR',
    'ALTER TABLE schools ADD COLUMN IF NOT EXISTS established_year VARCHAR',
    'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature VARCHAR',
+   'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature_data BYTEA',
+   'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature_mime_type VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_status VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_date DATE',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_reason VARCHAR',
@@ -50,7 +56,7 @@ def seed():
   cfg=db.query(SchoolConfig).filter(SchoolConfig.school_id==school.id).first()
   if not cfg:
    import json
-   db.add(SchoolConfig(school_id=school.id,classes_json=json.dumps(['UKG/KG2/PP1','1','2','3','4','5','6','7','8']),fields_json=json.dumps({'name':{'visible':True,'required':True},'class_name':{'visible':True,'required':True},'gender':{'visible':True,'required':True},'admission_no':{'visible':True,'required':False},'pen_number':{'visible':True,'required':False},'father_name':{'visible':True,'required':False},'mother_name':{'visible':True,'required':False},'date_of_birth':{'visible':True,'required':False},'category':{'visible':True,'required':False},'admission_date':{'visible':True,'required':False}})))
+   db.add(SchoolConfig(school_id=school.id,classes_json=json.dumps(['UKG/KG2/PP1','1','2','3','4','5','6','7','8']),fields_json=json.dumps({'name':{'visible':True,'required':True},'class_name':{'visible':True,'required':True},'gender':{'visible':True,'required':True},'admission_no':{'visible':True,'required':False},'pen_number':{'visible':True,'required':False},'father_name':{'visible':True,'required':False},'mother_name':{'visible':True,'required':False},'contact_number':{'visible':True,'required':False},'blood_group':{'visible':True,'required':False},'date_of_birth':{'visible':True,'required':False},'category':{'visible':True,'required':False},'admission_date':{'visible':True,'required':False}})))
   db.commit()
  finally:db.close()
 # seed();

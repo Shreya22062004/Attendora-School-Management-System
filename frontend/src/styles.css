@@ -85,6 +85,7 @@
 .idcard-preview-name{position:absolute;z-index:5;left:5%;width:90%;top:72.5%;color:#174f82;text-align:center;font-size:13.8px;line-height:1.05;font-weight:900;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.015em}
 .idcard-preview-info{position:absolute;z-index:4;left:8%;right:8%;top:77%;display:grid;gap:0;padding:5px 5px 4px 8px;border-left:3px solid #5b9dcc;background:linear-gradient(90deg,#f6fbff,#fff);font-size:8.1px;line-height:1.1;border-radius:0 8px 8px 0}
 .idcard-preview-info div{display:grid;grid-template-columns:42% 58%;min-width:0;padding:2.4px 0}
+.idcard-preview-info.has-extra-details div{padding:1px 0}
 .idcard-preview-info b{color:#174f82;font-size:7.1px;white-space:nowrap}
 .idcard-preview-info span{color:#24415e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}
 .idcard-preview-signature{position:absolute;z-index:6;right:5%;bottom:2.2%;width:38%;height:15%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:1px;padding:0;box-sizing:border-box;color:#174f82;font-size:5.8px;background:transparent;border:0;box-shadow:none}

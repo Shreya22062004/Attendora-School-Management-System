@@ -1,7 +1,6 @@
 """School-scoped student ID card management and print-ready PDF generation."""
 from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -47,17 +46,12 @@ def _image_type(data: bytes) -> tuple[str, str] | None:
     return None
 
 
-async def _save_image(upload: UploadFile, school_id: int, category: str) -> str:
+async def _read_image(upload: UploadFile) -> tuple[bytes, str]:
     data = await upload.read(MAX_IMAGE_BYTES + 1)
     image_info = _image_type(data)
     if not data or len(data) > MAX_IMAGE_BYTES or not image_info:
         raise HTTPException(400, "Upload a valid JPG, JPEG, or PNG image no larger than 5 MB")
-    extension, _ = image_info
-    relative = Path(str(school_id)) / category / f"{uuid4().hex}.{extension}"
-    target = UPLOAD_DIR / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return relative.as_posix()
+    return data, image_info[1]
 
 
 def _file_path(relative_path: str | None) -> Path | None:
@@ -73,6 +67,48 @@ def _remove_file(relative_path: str | None):
     path = _file_path(relative_path)
     if path:
         path.unlink(missing_ok=True)
+
+
+def _legacy_image(path: str | None) -> tuple[bytes, str] | None:
+    """Read legacy filesystem media without making it the source of truth."""
+    legacy_path = _file_path(path)
+    if not legacy_path:
+        return None
+    data = legacy_path.read_bytes()
+    image_info = _image_type(data)
+    return (data, image_info[1]) if image_info else None
+
+
+def _student_photo(student) -> tuple[bytes, str] | None:
+    if student.photo_data:
+        return student.photo_data, (student.photo_mime_type or "image/png")
+    return _legacy_image(student.photo)
+
+
+def _school_signature(school) -> tuple[bytes, str] | None:
+    if school and school.headmaster_signature_data:
+        return school.headmaster_signature_data, (school.headmaster_signature_mime_type or "image/png")
+    return _legacy_image(school.headmaster_signature if school else None)
+
+
+def _migrate_legacy_student_photo(student) -> bool:
+    if student.photo_data:
+        return False
+    legacy = _legacy_image(student.photo)
+    if not legacy:
+        return False
+    student.photo_data, student.photo_mime_type = legacy
+    return True
+
+
+def _migrate_legacy_signature(school) -> bool:
+    if not school or school.headmaster_signature_data:
+        return False
+    legacy = _legacy_image(school.headmaster_signature)
+    if not legacy:
+        return False
+    school.headmaster_signature_data, school.headmaster_signature_mime_type = legacy
+    return True
 
 
 def _student_query(db: Session, school_id: int, class_name: str | None, search: str | None):
@@ -100,12 +136,14 @@ def get_settings(user=Depends(require_school_user), db: Session = Depends(get_db
     school = db.get(models.School, user.school_id)
     if not school:
         raise HTTPException(404, "School not found")
+    if _migrate_legacy_signature(school):
+        db.commit()
     return {
         "school_name": school.school_name,
         "established_year": school.established_year or "",
         "address": school.address or "",
         "udise_code": school.udise_code or "",
-        "has_headmaster_signature": bool(_file_path(school.headmaster_signature)),
+        "has_headmaster_signature": bool(_school_signature(school)),
     }
 
 
@@ -118,6 +156,8 @@ def update_settings(payload: dict, user=Depends(require_school_user), db: Sessio
     school = db.get(models.School, user.school_id)
     if not school:
         raise HTTPException(404, "School not found")
+    if _migrate_legacy_signature(school):
+        db.commit()
     school.established_year = year or None
     db.add(models.AuditLog(
         school_id=user.school_id,
@@ -136,8 +176,9 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
     school = db.get(models.School, user.school_id)
     if not school:
         raise HTTPException(404, "School not found")
-    previous = school.headmaster_signature
-    school.headmaster_signature = await _save_image(file, user.school_id, "signature")
+    data, mime_type = await _read_image(file)
+    school.headmaster_signature_data = data
+    school.headmaster_signature_mime_type = mime_type
     db.add(models.AuditLog(
         school_id=user.school_id,
         user_id=user.id,
@@ -146,26 +187,27 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
         entity_id=str(school.id),
     ))
     db.commit()
-    _remove_file(previous)
     return {"message": "Headmaster signature saved"}
 
 
 @router.get("/settings/signature")
 def get_signature(user=Depends(require_school_user), db: Session = Depends(get_db)):
     school = db.get(models.School, user.school_id)
-    path = _file_path(school.headmaster_signature if school else None)
-    if not path:
+    if _migrate_legacy_signature(school):
+        db.commit()
+    signature = _school_signature(school)
+    if not signature:
         raise HTTPException(404, "Headmaster signature not uploaded")
-    return Response(
-        path.read_bytes(),
-        media_type="image/png" if path.suffix == ".png" else "image/jpeg",
-    )
+    data, mime_type = signature
+    return Response(data, media_type=mime_type)
 
 
 @router.get("/students")
 def list_students(class_name: str | None = None, search: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
     students = _student_query(db, user.school_id, class_name, search).all()
-    uploaded = sum(bool(_file_path(student.photo)) for student in students)
+    if any([_migrate_legacy_student_photo(student) for student in students]):
+        db.commit()
+    uploaded = sum(bool(_student_photo(student)) for student in students)
     return {
         "students": [{
             "id": student.id,
@@ -173,9 +215,11 @@ def list_students(class_name: str | None = None, search: str | None = None, user
             "class_name": student.class_name,
             "father_name": student.father_name,
             "mother_name": student.mother_name,
+            "contact_number": student.contact_number,
+            "blood_group": student.blood_group,
             "pen_number": student.pen_number,
             "date_of_birth": student.date_of_birth.isoformat() if student.date_of_birth else None,
-            "photo_uploaded": bool(_file_path(student.photo)),
+            "photo_uploaded": bool(_student_photo(student)),
         } for student in students],
         "summary": {
             "students": len(students),
@@ -199,8 +243,9 @@ def _get_student(db: Session, student_id: int, school_id: int):
 async def upload_photo(student_id: int, file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
     _require_school_admin(user)
     student = _get_student(db, student_id, user.school_id)
-    previous = student.photo
-    student.photo = await _save_image(file, user.school_id, "students")
+    data, mime_type = await _read_image(file)
+    student.photo_data = data
+    student.photo_mime_type = mime_type
     db.add(models.AuditLog(
         school_id=user.school_id,
         user_id=user.id,
@@ -209,7 +254,6 @@ async def upload_photo(student_id: int, file: UploadFile = File(...), user=Depen
         entity_id=str(student.id),
     ))
     db.commit()
-    _remove_file(previous)
     return {"message": "Student photo saved"}
 
 
@@ -219,6 +263,8 @@ def delete_photo(student_id: int, user=Depends(require_school_user), db: Session
     student = _get_student(db, student_id, user.school_id)
     previous = student.photo
     student.photo = None
+    student.photo_data = None
+    student.photo_mime_type = None
     db.commit()
     _remove_file(previous)
     return {"message": "Student photo removed"}
@@ -227,18 +273,18 @@ def delete_photo(student_id: int, user=Depends(require_school_user), db: Session
 @router.get("/students/{student_id}/photo")
 def get_photo(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
     student = _get_student(db, student_id, user.school_id)
-    path = _file_path(student.photo)
-    if not path:
+    if _migrate_legacy_student_photo(student):
+        db.commit()
+    photo = _student_photo(student)
+    if not photo:
         raise HTTPException(404, "Student photo not uploaded")
-    return Response(
-        path.read_bytes(),
-        media_type="image/png" if path.suffix == ".png" else "image/jpeg",
-    )
+    data, mime_type = photo
+    return Response(data, media_type=mime_type)
 
 
 def _draw_image_or_placeholder(
     pdf,
-    path: Path | None,
+    image_source: bytes | Path | None,
     x: float,
     y: float,
     width: float,
@@ -252,12 +298,12 @@ def _draw_image_or_placeholder(
         pdf.setFillColor(colors.HexColor("#f7faff"))
         pdf.roundRect(x, y, width, height, 1.2 * mm, fill=1, stroke=1)
 
-    if path:
+    if image_source:
         try:
             # Signature uploads often contain large white margins. Trim those margins
             # before placing the signature so the actual ink remains clearly visible.
             if not frame and not label:
-                pil_image = Image.open(path).convert("RGBA")
+                pil_image = Image.open(BytesIO(image_source) if isinstance(image_source, bytes) else image_source).convert("RGBA")
                 white = Image.new("RGBA", pil_image.size, (255, 255, 255, 255))
                 diff = ImageChops.difference(pil_image, white)
                 bbox = diff.convert("RGB").point(lambda p: 0 if p < 18 else 255).getbbox()
@@ -272,7 +318,7 @@ def _draw_image_or_placeholder(
                     pil_image = pil_image.crop(bbox)
                 image = ImageReader(pil_image)
             else:
-                image = ImageReader(str(path))
+                image = ImageReader(BytesIO(image_source) if isinstance(image_source, bytes) else str(image_source))
             image_width, image_height = image.getSize()
             scale = (max if cover else min)(width / image_width, height / image_height)
             draw_width, draw_height = image_width * scale, image_height * scale
@@ -415,9 +461,10 @@ def _draw_card(pdf, student, school, x: float, y: float):
     pdf.setStrokeColor(line_blue)
     pdf.setLineWidth(0.8)
     pdf.roundRect(photo_x - 1.2 * mm, photo_y - 1.2 * mm, photo_w + 2.4 * mm, photo_h + 2.4 * mm, 1.8 * mm, fill=1, stroke=1)
+    photo = _student_photo(student)
     _draw_image_or_placeholder(
         pdf,
-        _file_path(student.photo),
+        photo[0] if photo else None,
         photo_x,
         photo_y,
         photo_w,
@@ -445,6 +492,10 @@ def _draw_card(pdf, student, school, x: float, y: float):
         rows.append(("PEN NUMBER", student.pen_number))
     if student.date_of_birth:
         rows.append(("DATE OF BIRTH", student.date_of_birth.strftime("%d/%m/%Y")))
+    if student.contact_number:
+        rows.append(("CONTACT NO", student.contact_number))
+    if student.blood_group:
+        rows.append(("BLOOD GROUP", student.blood_group))
 
     detail_left = x + 10 * mm
     detail_value_x = x + 43 * mm
@@ -474,14 +525,14 @@ def _draw_card(pdf, student, school, x: float, y: float):
     pdf.setLineWidth(0.45)
     pdf.roundRect(panel_x, panel_y, panel_w, panel_h, 1.4 * mm, fill=1, stroke=1)
 
-    signature_path = _file_path(school.headmaster_signature)
+    signature = _school_signature(school)
     signature_w, signature_h = 22 * mm, 5.8 * mm
     signature_x = panel_x + (panel_w - signature_w) / 2
     signature_y = panel_y + 4.6 * mm
-    if signature_path:
+    if signature:
         _draw_image_or_placeholder(
             pdf,
-            signature_path,
+            signature[0],
             signature_x,
             signature_y,
             signature_w,

@@ -63,12 +63,12 @@ def promotion_list(u=Depends(require_school_user),db:Session=Depends(get_db)):
  ]
 @router.post('',response_model=schemas.StudentOut)
 def add(data:schemas.StudentCreate,u=Depends(require_school_user),db:Session=Depends(get_db)):
- g,a,p=validate(data,db,u.school_id);s=models.Student(school_id=u.school_id,name=data.name.strip(),class_name=data.class_name,section=data.section,stream=data.stream,gender=g,admission_no=a,pen_number=p,father_name=clean(data.father_name),mother_name=clean(data.mother_name),date_of_birth=data.date_of_birth,category=clean(data.category),admission_date=data.admission_date,is_active=True);db.add(s);db.commit();db.refresh(s);return s
+ g,a,p=validate(data,db,u.school_id);s=models.Student(school_id=u.school_id,name=data.name.strip(),class_name=data.class_name,section=data.section,stream=data.stream,gender=g,admission_no=a,pen_number=p,father_name=clean(data.father_name),mother_name=clean(data.mother_name),contact_number=clean(data.contact_number),blood_group=clean(data.blood_group),date_of_birth=data.date_of_birth,category=clean(data.category),admission_date=data.admission_date,is_active=True);db.add(s);db.commit();db.refresh(s);return s
 @router.put('/{student_id}',response_model=schemas.StudentOut)
 def update(student_id:int,data:schemas.StudentUpdate,u=Depends(require_school_user),db:Session=Depends(get_db)):
  s=db.query(models.Student).filter(models.Student.id==student_id,models.Student.school_id==u.school_id).first()
  if not s:raise HTTPException(404,'Student not found')
- g,a,p=validate(data,db,u.school_id,student_id);s.name=data.name.strip();s.class_name=data.class_name;s.section=data.section;s.stream=data.stream;s.gender=g;s.admission_no=a;s.pen_number=p;s.father_name=clean(data.father_name);s.mother_name=clean(data.mother_name);s.date_of_birth=data.date_of_birth;s.category=clean(data.category);s.admission_date=data.admission_date;s.is_active=data.is_active;db.commit();db.refresh(s);return s
+ g,a,p=validate(data,db,u.school_id,student_id);s.name=data.name.strip();s.class_name=data.class_name;s.section=data.section;s.stream=data.stream;s.gender=g;s.admission_no=a;s.pen_number=p;s.father_name=clean(data.father_name);s.mother_name=clean(data.mother_name);s.contact_number=clean(data.contact_number);s.blood_group=clean(data.blood_group);s.date_of_birth=data.date_of_birth;s.category=clean(data.category);s.admission_date=data.admission_date;s.is_active=data.is_active;db.commit();db.refresh(s);return s
 
 @router.delete('/{student_id}')
 def delete(
@@ -135,7 +135,7 @@ async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(r
    df=pd.read_excel(io.BytesIO(raw),header=header_idx)
  except Exception as e: raise HTTPException(400,f'Could not read file: {e}')
  def norm(c): return ' '.join(str(c).strip().lower().replace('_',' ').replace('.',' ').split())
- aliases={'student name':'name','name':'name','name of the student':'name','student':'name','class':'class_name','class name':'class_name','sl no':'class_name','slno':'class_name','gender':'gender','sex':'gender','section':'section','stream':'stream','admission no':'admission_no','admission number':'admission_no','pen number':'pen_number','pen':'pen_number','student pen':'pen_number','father name':'father_name','father s name':'father_name',"father's name":'father_name','mother name':'mother_name','mother s name':'mother_name',"mother's name":'mother_name','date of birth':'date_of_birth','dob':'date_of_birth','birth date':'date_of_birth','birthdate':'date_of_birth','social category':'category','category':'category','admission date':'admission_date'}
+ aliases={'student name':'name','name':'name','name of the student':'name','student':'name','class':'class_name','class name':'class_name','sl no':'class_name','slno':'class_name','gender':'gender','sex':'gender','section':'section','stream':'stream','admission no':'admission_no','admission number':'admission_no','pen number':'pen_number','pen':'pen_number','student pen':'pen_number','father name':'father_name','father s name':'father_name',"father's name":'father_name','mother name':'mother_name','mother s name':'mother_name',"mother's name":'mother_name','contact number':'contact_number','contact no':'contact_number','phone':'contact_number','phone number':'contact_number','blood group':'blood_group','bloodgroup':'blood_group','date of birth':'date_of_birth','dob':'date_of_birth','birth date':'date_of_birth','birthdate':'date_of_birth','social category':'category','category':'category','admission date':'admission_date'}
  df.columns=[aliases.get(norm(c),norm(c).replace(' ','_')) for c in df.columns]
  if 'class_name' not in df.columns and len(df.columns)>=3 and 'name' in df.columns and 'gender' in df.columns: df=df.rename(columns={df.columns[0]:'class_name'})
  missing=[x for x in ('name','class_name','gender') if x not in df.columns]
@@ -151,7 +151,7 @@ async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(r
    gen=gender_map.get((val('gender') or '').lower(),(val('gender') or '').title())
    cat=val('category')
    if cat and '-' in cat and cat.split('-',1)[0].strip().isdigit(): cat=cat.split('-',1)[1].strip()
-   data=schemas.StudentCreate(name=val('name') or '',class_name=cls,gender=gen,section=val('section'),stream=val('stream'),admission_no=val('admission_no'),pen_number=val('pen_number'),father_name=val('father_name'),mother_name=val('mother_name'),date_of_birth=pd.to_datetime(row.get('date_of_birth')).date() if 'date_of_birth' in df.columns and not pd.isna(row.get('date_of_birth')) else None,category=cat,admission_date=pd.to_datetime(row.get('admission_date')).date() if 'admission_date' in df.columns and not pd.isna(row.get('admission_date')) else None)
+   data=schemas.StudentCreate(name=val('name') or '',class_name=cls,gender=gen,section=val('section'),stream=val('stream'),admission_no=val('admission_no'),pen_number=val('pen_number'),father_name=val('father_name'),mother_name=val('mother_name'),contact_number=val('contact_number'),blood_group=val('blood_group'),date_of_birth=pd.to_datetime(row.get('date_of_birth')).date() if 'date_of_birth' in df.columns and not pd.isna(row.get('date_of_birth')) else None,category=cat,admission_date=pd.to_datetime(row.get('admission_date')).date() if 'admission_date' in df.columns and not pd.isna(row.get('admission_date')) else None)
    g,a,p=validate(data,db,u.school_id); prepared.append((data,g,a,p))
   except Exception as e: errors.append({'row':int(idx)+2,'error':str(e.detail if isinstance(e,HTTPException) else e)})
  if errors: raise HTTPException(400,{'message':'Import cancelled. Fix the invalid rows; existing directory was not changed.','errors':errors[:50]})
@@ -161,6 +161,8 @@ async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(r
  if mode=='replace':
   db.query(models.Student).filter_by(school_id=u.school_id,is_active=True).update({'is_active':False},synchronize_session=False)
  added=updated=unchanged=0
+ has_contact_number='contact_number' in df.columns
+ has_blood_group='blood_group' in df.columns
  consumed_ids=set()
  for data,g,a,pn in prepared:
   q=db.query(models.Student).filter(models.Student.school_id==u.school_id)
@@ -174,9 +176,9 @@ async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(r
    existing=next((x for x in candidates if x.id not in consumed_ids),None)
   if existing and existing.id not in consumed_ids:
    consumed_ids.add(existing.id)
-   existing.name=data.name.strip();existing.class_name=data.class_name;existing.section=data.section;existing.stream=data.stream;existing.gender=g;existing.admission_no=a;existing.pen_number=pn;existing.father_name=clean(data.father_name);existing.mother_name=clean(data.mother_name);existing.date_of_birth=data.date_of_birth;existing.category=clean(data.category);existing.admission_date=data.admission_date;existing.is_active=True;existing.exit_status=None;existing.exit_date=None;existing.exit_reason=None;updated+=1
+   existing.name=data.name.strip();existing.class_name=data.class_name;existing.section=data.section;existing.stream=data.stream;existing.gender=g;existing.admission_no=a;existing.pen_number=pn;existing.father_name=clean(data.father_name);existing.mother_name=clean(data.mother_name);existing.contact_number=clean(data.contact_number) if has_contact_number else existing.contact_number;existing.blood_group=clean(data.blood_group) if has_blood_group else existing.blood_group;existing.date_of_birth=data.date_of_birth;existing.category=clean(data.category);existing.admission_date=data.admission_date;existing.is_active=True;existing.exit_status=None;existing.exit_date=None;existing.exit_reason=None;updated+=1
   else:
-   obj=models.Student(school_id=u.school_id,name=data.name.strip(),class_name=data.class_name,section=data.section,stream=data.stream,gender=g,admission_no=a,pen_number=pn,father_name=clean(data.father_name),mother_name=clean(data.mother_name),date_of_birth=data.date_of_birth,category=clean(data.category),admission_date=data.admission_date,is_active=True)
+   obj=models.Student(school_id=u.school_id,name=data.name.strip(),class_name=data.class_name,section=data.section,stream=data.stream,gender=g,admission_no=a,pen_number=pn,father_name=clean(data.father_name),mother_name=clean(data.mother_name),contact_number=clean(data.contact_number),blood_group=clean(data.blood_group),date_of_birth=data.date_of_birth,category=clean(data.category),admission_date=data.admission_date,is_active=True)
    db.add(obj);db.flush();consumed_ids.add(obj.id);added+=1
  action='MERGE_IMPORT' if mode=='merge' else 'REPLACE_DIRECTORY'
  db.add(models.AuditLog(school_id=u.school_id,user_id=u.id,action=action,entity_type='StudentDirectory',new_value=json.dumps({'file':file.filename,'mode':mode,'rows':len(prepared),'added':added,'updated':updated})))

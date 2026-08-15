@@ -2,8 +2,8 @@ from datetime import date
 from typing import List,Optional
 from pydantic import BaseModel,field_validator,computed_field
 class StudentCreate(BaseModel):
- name:str; class_name:str; section:Optional[str]=None; stream:Optional[str]=None; gender:str; admission_no:Optional[str]=None; pen_number:Optional[str]=None; father_name:Optional[str]=None; mother_name:Optional[str]=None; date_of_birth:Optional[date]=None; category:Optional[str]=None; admission_date:Optional[date]=None
- @field_validator('admission_no','pen_number','father_name','mother_name','category','section','stream',mode='before')
+ name:str; class_name:str; section:Optional[str]=None; stream:Optional[str]=None; gender:str; admission_no:Optional[str]=None; pen_number:Optional[str]=None; father_name:Optional[str]=None; mother_name:Optional[str]=None; contact_number:Optional[str]=None; blood_group:Optional[str]=None; date_of_birth:Optional[date]=None; category:Optional[str]=None; admission_date:Optional[date]=None
+ @field_validator('admission_no','pen_number','father_name','mother_name','contact_number','blood_group','category','section','stream',mode='before')
  @classmethod
  def empty(cls,v): return None if v=='' else v
 class StudentUpdate(StudentCreate): is_active:bool=True

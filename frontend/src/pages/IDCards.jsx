@@ -35,9 +35,11 @@ function IDCard({ student, settings, photoSrc, signatureSrc, useProtectedImages 
     <div className="idcard-preview-wave" />
     <div className="idcard-preview-photo">{photo}</div>
     <div className="idcard-preview-name">{student.name}</div>
-    <div className="idcard-preview-info">
+    <div className={`idcard-preview-info${student.contact_number || student.blood_group ? " has-extra-details" : ""}`}>
       <div><b>FATHER NAME :</b><span>{student.father_name || "-"}</span></div>
       <div><b>MOTHER NAME :</b><span>{student.mother_name || "-"}</span></div>
+      {student.contact_number && <div><b>CONTACT NO :</b><span>{student.contact_number}</span></div>}
+      {student.blood_group && <div><b>BLOOD GROUP :</b><span>{student.blood_group}</span></div>}
       {student.pen_number && <div><b>PEN NUMBER :</b><span>{student.pen_number}</span></div>}
       {student.date_of_birth && <div><b>DATE OF BIRTH :</b><span>{date(student.date_of_birth)}</span></div>}
     </div>
@@ -335,6 +337,7 @@ export default function IDCards() {
                   <div className="row-actions">
                     <button type="button" className="edit-btn" onClick={() => setPreviewId(student.id)}>Preview</button>
                     {isAdmin && (
+                      <>
                       <label className="upload-btn">
                         {busy === `photo-${student.id}` ? "Uploading..." : student.photo_uploaded ? "Change Photo" : "Upload Photo"}
                         <input
@@ -347,6 +350,20 @@ export default function IDCards() {
                           }}
                         />
                       </label>
+                      <label className="upload-btn">
+                        {busy === `photo-${student.id}` ? "Uploading..." : "Use Camera"}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          capture="environment"
+                          disabled={busy === `photo-${student.id}`}
+                          onChange={event => {
+                            uploadPhoto(student, event.target.files?.[0]);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
+                      </>
                     )}
                     <button type="button" onClick={() => printCards([student])}>
                       Generate ID Card
