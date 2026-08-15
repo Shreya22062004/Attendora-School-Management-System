@@ -8,7 +8,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageOps
 from reportlab.pdfgen import canvas
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
@@ -318,7 +318,13 @@ def _draw_image_or_placeholder(
                     pil_image = pil_image.crop(bbox)
                 image = ImageReader(pil_image)
             else:
-                image = ImageReader(BytesIO(image_source) if isinstance(image_source, bytes) else str(image_source))
+                # Camera JPEGs may carry EXIF orientation rather than rotated pixel
+                # data. Normalize only the in-memory PDF image, leaving the stored
+                # original untouched for the browser preview and future downloads.
+                pil_image = ImageOps.exif_transpose(
+                    Image.open(BytesIO(image_source) if isinstance(image_source, bytes) else image_source)
+                )
+                image = ImageReader(pil_image)
             image_width, image_height = image.getSize()
             scale = (max if cover else min)(width / image_width, height / image_height)
             draw_width, draw_height = image_width * scale, image_height * scale
@@ -470,7 +476,9 @@ def _draw_card(pdf, student, school, x: float, y: float):
         photo_w,
         photo_h,
         "PHOTO PENDING",
-        cover=True,
+        # Match the shared browser card: preserve the complete uploaded portrait
+        # inside the fixed frame instead of cropping it to fill the box.
+        cover=False,
         frame=True,
     )
 

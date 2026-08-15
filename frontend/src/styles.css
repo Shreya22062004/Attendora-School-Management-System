@@ -80,8 +80,8 @@
 .idcard-preview-wave{position:absolute;z-index:2;top:22.5%;left:-8%;width:116%;height:7%;background:#eaf4fb;border-radius:0 0 50% 50%;transform:rotate(-1.2deg)}
 .idcard-preview-wave:after{content:"";position:absolute;left:0;top:0;width:48%;height:55%;background:#4b91bd;border-radius:0 0 90% 0}
 .idcard-preview-photo{position:absolute;z-index:4;left:50%;top:28.5%;transform:translateX(-50%);width:56%;height:43%;display:grid;place-items:center;overflow:hidden;border:4px solid #fff;border-radius:9px;background:#f7fbfe;box-shadow:0 0 0 1.5px #5b9dcc,0 7px 14px rgba(45,92,125,.14)}
-.idcard-preview-photo-image{width:100%;height:100%;object-fit:cover}
-.idcard-pdf-photo-image{display:block;background-position:center;background-repeat:no-repeat;background-size:cover}
+.idcard-preview-photo-image{width:100%;height:100%;object-fit:contain;object-position:center;background:#f7fbfe}
+.idcard-pdf-photo-image{display:block;background-position:center;background-repeat:no-repeat;background-size:contain}
 .idcard-preview-name{position:absolute;z-index:5;left:5%;width:90%;top:72.5%;color:#174f82;text-align:center;font-size:13.8px;line-height:1.05;font-weight:900;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.015em}
 .idcard-preview-info{position:absolute;z-index:4;left:8%;right:8%;top:77%;display:grid;gap:0;padding:5px 5px 4px 8px;border-left:3px solid #5b9dcc;background:linear-gradient(90deg,#f6fbff,#fff);font-size:8.1px;line-height:1.1;border-radius:0 8px 8px 0}
 .idcard-preview-info div{display:grid;grid-template-columns:42% 58%;min-width:0;padding:2.4px 0}
