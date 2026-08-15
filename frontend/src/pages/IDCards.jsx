@@ -324,7 +324,7 @@ export default function IDCards() {
     if (saved) setPhotoEditor(null);
   };
 
-  const printCards = async studentsToPrint => {
+  const printCards = async (studentsToPrint, onlyLoadablePhotos = false) => {
     if (!studentsToPrint.length) return;
     setBusy("download"); setMessage("");
     try {
@@ -337,12 +337,38 @@ export default function IDCards() {
           reader.readAsDataURL(response.data);
         });
       };
-      const photoEntries = await Promise.all(studentsToPrint.map(async student => [
-        student.id,
-        student.photo_uploaded ? await toDataUrl(`/idcards/students/${student.id}/photo`) : ""
-      ]));
+      const loadVerifiedPhoto = async student => {
+        const source = await toDataUrl(`/idcards/students/${student.id}/photo`);
+        await new Promise((resolve, reject) => {
+          const image = new Image();
+          image.onload = resolve;
+          image.onerror = () => reject(new Error("Student photo is invalid"));
+          image.src = source;
+        });
+        return [student.id, source];
+      };
+      let printableStudents = studentsToPrint;
+      let photoEntries;
+      if (onlyLoadablePhotos) {
+        // `photo_uploaded` originates from the backend storage check. Validate
+        // each returned image too, so stale or corrupt media never creates a card.
+        const candidates = studentsToPrint.filter(student => student.photo_uploaded);
+        const results = await Promise.allSettled(candidates.map(loadVerifiedPhoto));
+        photoEntries = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+        const validPhotoIds = new Set(photoEntries.map(([studentId]) => studentId));
+        printableStudents = candidates.filter(student => validPhotoIds.has(student.id));
+        if (!printableStudents.length) {
+          setMessage("No student photos are available. Please upload photos before downloading all cards.");
+          return;
+        }
+      } else {
+        photoEntries = await Promise.all(studentsToPrint.map(async student => [
+          student.id,
+          student.photo_uploaded ? await toDataUrl(`/idcards/students/${student.id}/photo`) : ""
+        ]));
+      }
       const signatureSrc = settings.has_headmaster_signature ? await toDataUrl("/idcards/settings/signature") : "";
-      const pages = Array.from({ length: Math.ceil(studentsToPrint.length / 4) }, (_, index) => studentsToPrint.slice(index * 4, index * 4 + 4));
+      const pages = Array.from({ length: Math.ceil(printableStudents.length / 4) }, (_, index) => printableStudents.slice(index * 4, index * 4 + 4));
       setPrintJob({ pages, photoSources: Object.fromEntries(photoEntries), signatureSrc });
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (document.fonts?.ready) await document.fonts.ready;
@@ -381,7 +407,7 @@ export default function IDCards() {
       </div>
       <button
         className="primary-btn"
-        onClick={() => printCards(shown)}
+        onClick={() => printCards(shown, true)}
         disabled={busy === "download"}
       >
         {busy === "download" ? "Generating..." : "Download All ID Cards"}
