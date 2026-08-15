@@ -17,6 +17,40 @@ function ProtectedImage({ path, alt, className }) {
     : <span className="id-image-placeholder">No image</span>;
 }
 
+function IDCard({ student, settings, photoSrc, signatureSrc, useProtectedImages = false, refreshKey }) {
+  const date = value => value ? value.split("-").reverse().join("/") : "";
+  const photo = student.photo_uploaded
+    ? (useProtectedImages
+      ? <ProtectedImage key={`${student.id}-${refreshKey}`} path={`/idcards/students/${student.id}/photo`} className="idcard-preview-photo-image" alt={`${student.name} photo`} />
+      : photoSrc ? <img className="idcard-preview-photo-image" src={photoSrc} alt={`${student.name} photo`} /> : <span className="id-image-placeholder">PHOTO PENDING</span>)
+    : <span className="id-image-placeholder">PHOTO PENDING</span>;
+
+  return <article className="idcard-preview">
+    <div className="idcard-preview-header">
+      <div className="idcard-preview-school">{settings.school_name || "SCHOOL NAME"}</div>
+      {settings.established_year && <div className="idcard-preview-estd">ESTD - {settings.established_year}</div>}
+      {settings.address && <div className="idcard-preview-address">{settings.address}</div>}
+      {settings.udise_code && <div className="idcard-preview-udise">UDISE CODE - {settings.udise_code}</div>}
+    </div>
+    <div className="idcard-preview-wave" />
+    <div className="idcard-preview-photo">{photo}</div>
+    <div className="idcard-preview-name">{student.name}</div>
+    <div className="idcard-preview-info">
+      <div><b>FATHER NAME :</b><span>{student.father_name || "-"}</span></div>
+      <div><b>MOTHER NAME :</b><span>{student.mother_name || "-"}</span></div>
+      {student.pen_number && <div><b>PEN NUMBER :</b><span>{student.pen_number}</span></div>}
+      {student.date_of_birth && <div><b>DATE OF BIRTH :</b><span>{date(student.date_of_birth)}</span></div>}
+    </div>
+    <div className="idcard-preview-signature">
+      {settings.has_headmaster_signature && (useProtectedImages
+        ? <ProtectedImage key={`signature-${refreshKey}`} path="/idcards/settings/signature" className="idcard-preview-signature-image" alt="Headmaster signature" />
+        : signatureSrc && <img className="idcard-preview-signature-image" src={signatureSrc} alt="Headmaster signature" />)}
+      <span className="idcard-preview-signature-line" />
+      <b>HEADMASTER</b>
+    </div>
+  </article>;
+}
+
 export default function IDCards() {
   const isAdmin = (localStorage.getItem("school_role") || "teacher") === "school_admin";
   const [students, setStudents] = useState([]);
@@ -35,6 +69,7 @@ export default function IDCards() {
   const [busy, setBusy] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewId, setPreviewId] = useState(null);
+  const [printJob, setPrintJob] = useState(null);
 
   const load = async () => {
     try {
@@ -64,7 +99,6 @@ export default function IDCards() {
 
   const uploaded = shown.filter(student => student.photo_uploaded).length;
   const previewStudent = shown.find(student => student.id === previewId) || shown[0];
-  const displayDate = value => value ? value.split("-").reverse().join("/") : "";
 
   const saveYear = async () => {
     setBusy("year"); setMessage("");
@@ -107,21 +141,52 @@ export default function IDCards() {
     } finally { setBusy(""); }
   };
 
-  const download = async (path, filename) => {
+  const printCards = async studentsToPrint => {
+    if (!studentsToPrint.length) return;
     setBusy("download"); setMessage("");
     try {
-      const response = await api.get(path, { responseType: "blob" });
-      const url = URL.createObjectURL(response.data);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      const toDataUrl = async path => {
+        const response = await api.get(path, { responseType: "blob" });
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(response.data);
+        });
+      };
+      const photoEntries = await Promise.all(studentsToPrint.map(async student => [
+        student.id,
+        student.photo_uploaded ? await toDataUrl(`/idcards/students/${student.id}/photo`) : ""
+      ]));
+      const signatureSrc = settings.has_headmaster_signature ? await toDataUrl("/idcards/settings/signature") : "";
+      const pages = Array.from({ length: Math.ceil(studentsToPrint.length / 4) }, (_, index) => studentsToPrint.slice(index * 4, index * 4 + 4));
+      setPrintJob({ pages, photoSources: Object.fromEntries(photoEntries), signatureSrc });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (document.fonts?.ready) await document.fonts.ready;
+      const images = Array.from(document.querySelectorAll(".idcard-print-root img"));
+      await Promise.all(images.map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      })));
+      // Chrome can return from window.print() before a large multi-page PDF has
+      // finished consuming the print DOM. Keep all cards mounted until its print
+      // lifecycle completes; otherwise the saved bulk PDF can be empty/corrupt.
+      await new Promise(resolve => {
+        const completePrint = () => {
+          window.removeEventListener("afterprint", completePrint);
+          setTimeout(resolve, 250);
+        };
+        window.addEventListener("afterprint", completePrint, { once: true });
+        window.print();
+      });
     } catch (error) {
-      setMessage(error.response?.data?.detail || "PDF generation failed");
-    } finally { setBusy(""); }
+      setMessage(error.response?.data?.detail || "Could not prepare ID cards for printing");
+    } finally {
+      // Keep the hidden print sheet alive after the dialog closes. Some Windows
+      // PDF drivers finish writing a large document after `afterprint` fires;
+      // unmounting here can truncate the generated file.
+      setBusy("");
+    }
   };
 
   return <>
@@ -129,14 +194,11 @@ export default function IDCards() {
       <div>
         <p className="eyebrow">STUDENT IDENTITY</p>
         <h1>ID Cards</h1>
-        <p className="muted">A3 portrait card • 92 × 115 mm • 4 cards per A4 sheet.</p>
+        <p className="muted">85 × 110 mm portrait card • 4 cards per A4 sheet • choose Save as PDF at Actual Size.</p>
       </div>
       <button
         className="primary-btn"
-        onClick={() => download(
-          `/idcards/bulk.pdf${classFilter ? `?class_name=${encodeURIComponent(classFilter)}` : ""}`,
-          "attendora-id-cards.pdf"
-        )}
+        onClick={() => printCards(shown)}
         disabled={busy === "download"}
       >
         {busy === "download" ? "Generating..." : "Download All ID Cards"}
@@ -206,55 +268,14 @@ export default function IDCards() {
           <div>
             <h2>Print Design Preview</h2>
             <p className="muted">
-              A3 portrait card: 92 × 115 mm. Clean school branding, large photo, readable student details, and signature.
+              85 × 110 mm portrait card. Clean school branding, large photo, readable student details, and signature.
             </p>
           </div>
           <span className="badge">{previewStudent.name}</span>
         </div>
 
         <div className="idcard-preview-wrap">
-          <article className="idcard-preview">
-            <div className="idcard-preview-header">
-              <div className="idcard-preview-school">{settings.school_name || "SCHOOL NAME"}</div>
-              {settings.established_year && <div className="idcard-preview-estd">ESTD - {settings.established_year}</div>}
-              {settings.address && <div className="idcard-preview-address">{settings.address}</div>}
-              {settings.udise_code && <div className="idcard-preview-udise">UDISE CODE - {settings.udise_code}</div>}
-            </div>
-
-            <div className="idcard-preview-wave" />
-            <div className="idcard-preview-photo">
-              {previewStudent.photo_uploaded
-                ? <ProtectedImage
-                    key={`${previewStudent.id}-${refreshKey}`}
-                    path={`/idcards/students/${previewStudent.id}/photo`}
-                    className="idcard-preview-photo-image"
-                    alt={`${previewStudent.name} photo`}
-                  />
-                : <span className="id-image-placeholder">PHOTO PENDING</span>}
-            </div>
-
-            <div className="idcard-preview-name">{previewStudent.name}</div>
-
-            <div className="idcard-preview-info">
-              <div><b>FATHER NAME :</b><span>{previewStudent.father_name || "-"}</span></div>
-              <div><b>MOTHER NAME :</b><span>{previewStudent.mother_name || "-"}</span></div>
-              {previewStudent.pen_number && <div><b>PEN NUMBER :</b><span>{previewStudent.pen_number}</span></div>}
-              {previewStudent.date_of_birth && <div><b>DATE OF BIRTH :</b><span>{displayDate(previewStudent.date_of_birth)}</span></div>}
-            </div>
-
-            <div className="idcard-preview-signature">
-              {settings.has_headmaster_signature && (
-                <ProtectedImage
-                  key={`signature-${refreshKey}`}
-                  path="/idcards/settings/signature"
-                  className="idcard-preview-signature-image"
-                  alt="Headmaster signature"
-                />
-              )}
-              <span className="idcard-preview-signature-line" />
-              <b>HEADMASTER</b>
-            </div>
-          </article>
+          <IDCard student={previewStudent} settings={settings} useProtectedImages refreshKey={refreshKey} />
         </div>
       </section>
     )}
@@ -327,7 +348,7 @@ export default function IDCards() {
                         />
                       </label>
                     )}
-                    <button type="button" onClick={() => download(`/idcards/${student.id}.pdf`, `id-card-${student.id}.pdf`)}>
+                    <button type="button" onClick={() => printCards([student])}>
                       Generate ID Card
                     </button>
                   </div>
@@ -340,5 +361,17 @@ export default function IDCards() {
 
       {!shown.length && <div className="empty">No students found for this filter.</div>}
     </section>
+
+    {printJob && <div className="idcard-print-root">
+      {printJob.pages.map((page, pageIndex) => <div className="idcard-print-page" key={pageIndex}>
+        {page.map(student => <IDCard
+          key={student.id}
+          student={student}
+          settings={settings}
+          photoSrc={printJob.photoSources[student.id]}
+          signatureSrc={printJob.signatureSrc}
+        />)}
+      </div>)}
+    </div>}
   </>;
 }
