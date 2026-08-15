@@ -1,5 +1,174 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
+
+// These dimensions retain the existing ID-card photo-frame ratio
+// (56% of an 85 mm card by 43% of a 110 mm card). The editor bakes the
+// user's chosen framing into a normal image file, so every existing display
+// and PDF path uses precisely the same result without new database metadata.
+const PHOTO_CROP_WIDTH = 1006;
+const PHOTO_CROP_HEIGHT = 1000;
+
+function PhotoAdjuster({ file, student, onCancel, onSave }) {
+  const frameRef = useRef(null);
+  const [source, setSource] = useState("");
+  const [naturalSize, setNaturalSize] = useState(null);
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(file);
+    setSource(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+
+  useEffect(() => {
+    if (!frameRef.current) return undefined;
+    const updateSize = () => {
+      const rect = frameRef.current?.getBoundingClientRect();
+      if (rect) setFrameSize({ width: rect.width, height: rect.height });
+    };
+    updateSize();
+    if (!window.ResizeObserver) {
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(frameRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const baseScale = naturalSize && frameSize.width && frameSize.height
+    ? Math.min(frameSize.width / naturalSize.width, frameSize.height / naturalSize.height)
+    : 1;
+  const imageWidth = naturalSize ? naturalSize.width * baseScale * zoom : 0;
+  const imageHeight = naturalSize ? naturalSize.height * baseScale * zoom : 0;
+
+  const clampPosition = next => {
+    if (!frameSize.width || !frameSize.height || !imageWidth || !imageHeight) return next;
+    // Keep at least a small part of the image inside the frame while allowing
+    // deliberate letterboxing at the minimum zoom level.
+    const maxX = Math.max(0, (frameSize.width + imageWidth) / 2 - 24);
+    const maxY = Math.max(0, (frameSize.height + imageHeight) / 2 - 24);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, next.x)),
+      y: Math.max(-maxY, Math.min(maxY, next.y))
+    };
+  };
+
+  const reset = () => {
+    setZoom(1);
+    setPosition({ x: 0, y: 0 });
+  };
+
+  const save = async () => {
+    if (!naturalSize || !frameSize.width || !frameSize.height) return;
+    setSaving(true);
+    setError("");
+    try {
+      const image = new Image();
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = () => reject(new Error("This image could not be opened"));
+        image.src = source;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = PHOTO_CROP_WIDTH;
+      canvas.height = PHOTO_CROP_HEIGHT;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#f7fbfe";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      const outputScale = canvas.width / frameSize.width;
+      const drawWidth = imageWidth * outputScale;
+      const drawHeight = imageHeight * outputScale;
+      context.drawImage(
+        image,
+        (canvas.width - drawWidth) / 2 + position.x * outputScale,
+        (canvas.height - drawHeight) / 2 + position.y * outputScale,
+        drawWidth,
+        drawHeight
+      );
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.95));
+      if (!blob) throw new Error("Could not prepare the adjusted image");
+      const filename = `${file.name.replace(/\.[^.]+$/, "") || "student-photo"}-id-card.jpg`;
+      await onSave(new File([blob], filename, { type: "image/jpeg" }));
+    } catch (saveError) {
+      setError(saveError.message || "Could not prepare the photo");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="modal-backdrop photo-adjuster-backdrop" role="dialog" aria-modal="true" aria-labelledby="photo-adjuster-title">
+    <section className="modal-card photo-adjuster-card">
+      <div>
+        <h2 id="photo-adjuster-title">Adjust Photo</h2>
+        <p className="muted">{student.name} — drag to position and use the slider to zoom.</p>
+      </div>
+      <div
+        ref={frameRef}
+        className="photo-adjuster-frame"
+        onPointerDown={event => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragStart({ x: event.clientX, y: event.clientY, position });
+        }}
+        onPointerMove={event => {
+          if (!dragStart) return;
+          setPosition(clampPosition({
+            x: dragStart.position.x + event.clientX - dragStart.x,
+            y: dragStart.position.y + event.clientY - dragStart.y
+          }));
+        }}
+        onPointerUp={() => setDragStart(null)}
+        onPointerCancel={() => setDragStart(null)}
+      >
+        {source && <img
+          src={source}
+          alt="Adjust student photo"
+          draggable="false"
+          className="photo-adjuster-image"
+          onLoad={event => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+          onError={() => setError("This image could not be opened")}
+          style={naturalSize ? {
+            width: imageWidth,
+            height: imageHeight,
+            left: `calc(50% + ${position.x}px)`,
+            top: `calc(50% + ${position.y}px)`
+          } : undefined}
+        />}
+        <span className="photo-adjuster-frame-label">ID-card photo area</span>
+      </div>
+      <label className="photo-adjuster-zoom">
+        Zoom
+        <div className="photo-adjuster-zoom-control">
+          <button type="button" aria-label="Zoom out" onClick={() => setZoom(current => Math.max(1, current - 0.1))} disabled={!naturalSize || saving}>−</button>
+          <input
+            type="range"
+            min="1"
+            max="3"
+            step="0.01"
+            value={zoom}
+            onChange={event => setZoom(Number(event.target.value))}
+            disabled={!naturalSize || saving}
+          />
+          <button type="button" aria-label="Zoom in" onClick={() => setZoom(current => Math.min(3, current + 0.1))} disabled={!naturalSize || saving}>+</button>
+        </div>
+      </label>
+      {error && <p className="photo-adjuster-error">{error}</p>}
+      <div className="modal-actions photo-adjuster-actions">
+        <button type="button" onClick={reset} disabled={saving}>Reset</button>
+        <span />
+        <button type="button" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button type="button" className="primary-btn" onClick={save} disabled={!naturalSize || saving}>
+          {saving ? "Saving..." : "Confirm Photo"}
+        </button>
+      </div>
+    </section>
+  </div>;
+}
 
 function ProtectedImage({ path, alt, className }) {
   const [src, setSrc] = useState("");
@@ -72,6 +241,7 @@ export default function IDCards() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [previewId, setPreviewId] = useState(null);
   const [printJob, setPrintJob] = useState(null);
+  const [photoEditor, setPhotoEditor] = useState(null);
 
   const load = async () => {
     try {
@@ -129,7 +299,7 @@ export default function IDCards() {
   };
 
   const uploadPhoto = async (student, file) => {
-    if (!file) return;
+    if (!file) return false;
     setBusy(`photo-${student.id}`); setMessage("");
     try {
       const form = new FormData();
@@ -138,9 +308,20 @@ export default function IDCards() {
       setMessage(`Photo saved for ${student.name}.`);
       await load();
       setRefreshKey(key => key + 1);
+      return true;
     } catch (error) {
       setMessage(error.response?.data?.detail || "Could not upload photo");
+      return false;
     } finally { setBusy(""); }
+  };
+
+  const openPhotoEditor = (student, file) => {
+    if (file) setPhotoEditor({ student, file });
+  };
+
+  const saveAdjustedPhoto = async file => {
+    const saved = await uploadPhoto(photoEditor.student, file);
+    if (saved) setPhotoEditor(null);
   };
 
   const printCards = async studentsToPrint => {
@@ -345,7 +526,7 @@ export default function IDCards() {
                           accept="image/png,image/jpeg"
                           disabled={busy === `photo-${student.id}`}
                           onChange={event => {
-                            uploadPhoto(student, event.target.files?.[0]);
+                            openPhotoEditor(student, event.target.files?.[0]);
                             event.target.value = "";
                           }}
                         />
@@ -358,7 +539,7 @@ export default function IDCards() {
                           capture="environment"
                           disabled={busy === `photo-${student.id}`}
                           onChange={event => {
-                            uploadPhoto(student, event.target.files?.[0]);
+                            openPhotoEditor(student, event.target.files?.[0]);
                             event.target.value = "";
                           }}
                         />
@@ -390,5 +571,11 @@ export default function IDCards() {
         />)}
       </div>)}
     </div>}
+    {photoEditor && <PhotoAdjuster
+      file={photoEditor.file}
+      student={photoEditor.student}
+      onCancel={() => setPhotoEditor(null)}
+      onSave={saveAdjustedPhoto}
+    />}
   </>;
 }

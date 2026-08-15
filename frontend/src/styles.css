@@ -94,6 +94,21 @@
 .idcard-preview-signature b{white-space:nowrap;font-size:7px;letter-spacing:.035em}
 .idcard-print-note{display:block;max-width:360px;margin-top:8px;color:#64748b;font-size:12px;line-height:1.35}.idcard-selected-row td{background:#eff8ff}
 
+.photo-adjuster-card{width:min(540px,100%)}
+.photo-adjuster-card h2{margin:0}
+.photo-adjuster-frame{position:relative;width:min(100%,360px);justify-self:center;aspect-ratio:1006/1000;overflow:hidden;touch-action:none;cursor:grab;border:4px solid #fff;border-radius:9px;background:#f7fbfe;box-shadow:0 0 0 1.5px #5b9dcc,0 7px 14px rgba(45,92,125,.14)}
+.photo-adjuster-frame:active{cursor:grabbing}
+.photo-adjuster-image{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:none;user-select:none;pointer-events:none}
+.photo-adjuster-frame-label{position:absolute;left:8px;bottom:8px;padding:4px 7px;border-radius:999px;background:#174f82d9;color:#fff;font-size:11px;font-weight:750;pointer-events:none}
+.photo-adjuster-zoom{display:grid;gap:7px;color:#475569;font-size:13px;font-weight:700}
+.photo-adjuster-zoom-control{display:flex;align-items:center;gap:9px}
+.photo-adjuster-zoom-control button{padding:5px 11px;background:#e0f2fe;color:#0369a1}
+.photo-adjuster-zoom-control input{flex:1}
+.photo-adjuster-zoom input{padding:0;accent-color:#2563eb}
+.photo-adjuster-error{margin:0;color:#b91c1c;font-size:13px;font-weight:650}
+.photo-adjuster-actions span{flex:1}
+@media(max-width:560px){.photo-adjuster-backdrop{padding:12px}.photo-adjuster-card{padding:18px}.photo-adjuster-frame{width:min(100%,320px)}}
+
 .idcard-print-root{display:none}
 
 @media print{
