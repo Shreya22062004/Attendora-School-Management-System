@@ -6,7 +6,7 @@ python-multipart
 pandas
 openpyxl
 python-jose[cryptography]
-psycopg[binary]
+psycopg2-binary
 reportlab
 xlrd
 Pillow
