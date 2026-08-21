@@ -170,17 +170,21 @@ function PhotoAdjuster({ file, student, onCancel, onSave }) {
   </div>;
 }
 
-function ProtectedImage({ path, alt, className }) {
+function ProtectedImage({ path, src: directSrc = "", alt, className }) {
   const [src, setSrc] = useState("");
   useEffect(() => {
     let url = "";
+    if (directSrc) {
+      setSrc(directSrc);
+      return undefined;
+    }
     if (!path) { setSrc(""); return undefined; }
     api.get(path, { responseType: "blob" }).then(response => {
       url = URL.createObjectURL(response.data);
       setSrc(url);
     }).catch(() => setSrc(""));
     return () => { if (url) URL.revokeObjectURL(url); };
-  }, [path]);
+  }, [path, directSrc]);
   return src
     ? <img className={className} src={src} alt={alt} />
     : <span className="id-image-placeholder">No image</span>;
@@ -190,7 +194,7 @@ function IDCard({ student, settings, photoSrc, signatureSrc, useProtectedImages 
   const date = value => value ? value.split("-").reverse().join("/") : "";
   const photo = student.photo_uploaded
     ? (useProtectedImages
-      ? <ProtectedImage key={`${student.id}-${refreshKey}`} path={`/idcards/students/${student.id}/photo`} className="idcard-preview-photo-image" alt={`${student.name} photo`} />
+      ? <ProtectedImage key={`${student.id}-${refreshKey}`} src={student.photo_url} path={`/idcards/students/${student.id}/photo`} className="idcard-preview-photo-image" alt={`${student.name} photo`} />
       : photoSrc ? <img className="idcard-preview-photo-image" src={photoSrc} alt={`${student.name} photo`} /> : <span className="id-image-placeholder">PHOTO PENDING</span>)
     : <span className="id-image-placeholder">PHOTO PENDING</span>;
 
@@ -214,7 +218,7 @@ function IDCard({ student, settings, photoSrc, signatureSrc, useProtectedImages 
     </div>
     <div className="idcard-preview-signature">
       {settings.has_headmaster_signature && (useProtectedImages
-        ? <ProtectedImage key={`signature-${refreshKey}`} path="/idcards/settings/signature" className="idcard-preview-signature-image" alt="Headmaster signature" />
+        ? <ProtectedImage key={`signature-${refreshKey}`} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="idcard-preview-signature-image" alt="Headmaster signature" />
         : signatureSrc && <img className="idcard-preview-signature-image" src={signatureSrc} alt="Headmaster signature" />)}
       <span className="idcard-preview-signature-line" />
       <b>HEADMASTER</b>
@@ -231,6 +235,7 @@ export default function IDCards() {
     established_year: "",
     address: "",
     udise_code: "",
+    headmaster_signature_url: "",
     has_headmaster_signature: false
   });
   const [year, setYear] = useState("");
@@ -459,7 +464,7 @@ export default function IDCards() {
 
       <div className="signature-preview">
         {settings.has_headmaster_signature
-          ? <ProtectedImage key={refreshKey} path="/idcards/settings/signature" className="signature-image" alt="Current headmaster signature" />
+          ? <ProtectedImage key={refreshKey} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="signature-image" alt="Current headmaster signature" />
           : <span className="muted">No signature uploaded.</span>}
         <span>
           {settings.has_headmaster_signature
@@ -532,6 +537,7 @@ export default function IDCards() {
                     {student.photo_uploaded
                       ? <ProtectedImage
                           key={`${student.id}-${refreshKey}`}
+                          src={student.photo_url}
                           path={`/idcards/students/${student.id}/photo`}
                           className="student-photo-image"
                           alt={`${student.name} photo`}

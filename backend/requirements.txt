@@ -9,3 +9,5 @@ python-jose[cryptography]
 psycopg[binary]
 reportlab
 xlrd
+Pillow
+cloudinary
