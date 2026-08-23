@@ -256,7 +256,7 @@ https://huggingface.co/spaces/Shreyashu123/attendora-backend
 
 ### Production Database
 
-The application uses a cloud-hosted PostgreSQL database provided by Neon.
+The application uses a cloud-hosted PostgreSQL database provided by Supabase.
 
 The database securely stores school configurations, users, student records, attendance data, academic-year information, holidays and other application data.
 
