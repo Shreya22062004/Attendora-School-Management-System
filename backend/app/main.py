@@ -64,9 +64,38 @@ def seed():
   db.commit()
  finally:db.close()
 # seed();
-app=FastAPI(title='Multi-School Attendance System');origins=['http://localhost:5173','http://127.0.0.1:5173'];origins += [x.strip() for x in os.getenv('CORS_ORIGINS','').split(',') if x.strip()];app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
-for r in [auth.router,settings.router,students.router,attendance.router,reports.router,calendar.router,exports.router,backup.router,academic.router,idcards.router]:app.include_router(r)
+
+app = FastAPI(title="Multi-School Attendance System")
+
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+for r in [
+    auth.router,
+    settings.router,
+    students.router,
+    attendance.router,
+    reports.router,
+    calendar.router,
+    exports.router,
+    backup.router,
+    academic.router,
+    idcards.router,
+]:
+    app.include_router(r)
+
 @app.get('/')
 def root():return {'message':'Multi-School Attendance API is running'}
 @app.get('/health')
 def health():return {'status':'ok','database':'connected'}
+

@@ -17,22 +17,11 @@ def key(school_id, category, owner_id):
     return f"attendora/signatures/{school_id}_headmaster"
 
 
-def migrate_student(db, student_id, apply):
-    student = (
-        db.query(models.Student)
-        .filter(models.Student.id == student_id)
-        .first()
-    )
-
-    if not student:
-        return "failed"
-
+def migrate_student(db, student, apply):
     if student.photo_storage_key:
-        print(f"SKIP student {student.id} -> already migrated")
         return "already_migrated"
 
     if not student.photo_data:
-        print(f"SKIP student {student.id} -> no photo")
         return "skipped_no_media"
 
     storage_key = key(student.school_id, "students", student.id)
@@ -58,33 +47,18 @@ def migrate_student(db, student_id, apply):
 
     except Exception as error:
         db.rollback()
-        print(f"FAILED student {student_id}: {error}")
+        print(f"FAILED student {student.id}: {error}")
         return "failed"
 
 
-def migrate_signature(db, school_id, apply):
-    school = (
-        db.query(models.School)
-        .filter(models.School.id == school_id)
-        .first()
-    )
-
-    if not school:
-        return "failed"
-
+def migrate_signature(db, school, apply):
     if school.headmaster_signature_key:
-        print(f"SKIP school signature {school.id} -> already migrated")
         return "already_migrated"
 
     if not school.headmaster_signature_data:
-        print(f"SKIP school signature {school.id} -> no signature")
         return "skipped_no_media"
 
-    storage_key = key(
-        school.id,
-        "signatures",
-        school.id,
-    )
+    storage_key = key(school.id, "signatures", school.id)
 
     if not apply:
         print(f"DRY RUN school signature {school.id} -> {storage_key}")
@@ -102,16 +76,12 @@ def migrate_signature(db, school_id, apply):
 
         db.commit()
 
-        print(
-            f"UPLOADED school signature {school.id} -> {public_id}"
-        )
+        print(f"UPLOADED school signature {school.id} -> {public_id}")
         return "uploaded"
 
     except Exception as error:
         db.rollback()
-        print(
-            f"FAILED school signature {school_id}: {error}"
-        )
+        print(f"FAILED school signature {school.id}: {error}")
         return "failed"
 
 
@@ -120,7 +90,7 @@ def main():
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Upload media and save Cloudinary references",
+        help="Actually upload media to Cloudinary",
     )
     args = parser.parse_args()
 
@@ -136,56 +106,40 @@ def main():
 
     try:
         # IMPORTANT:
-        # Do NOT use yield_per() here.
-        # Each student is queried separately so db.commit()
-        # cannot invalidate a long-running PostgreSQL cursor.
+        # Process one record at a time instead of .all().
+        student_query = (
+            db.query(models.Student)
+            .filter(models.Student.photo_data.isnot(None))
+            .order_by(models.Student.id)
+            .yield_per(1)
+        )
 
-        student_ids = [
-            row[0]
-            for row in (
-                db.query(models.Student.id)
-                .filter(models.Student.photo_data.isnot(None))
-                .order_by(models.Student.id)
-                .all()
-            )
-        ]
-
-        print(f"Students with photo_data: {len(student_ids)}")
-
-        for student_id in student_ids:
+        for student in student_query:
             summary["total"] += 1
 
             result = migrate_student(
                 db,
-                student_id,
+                student,
                 args.apply,
             )
 
             if result in summary:
                 summary[result] += 1
 
-        school_ids = [
-            row[0]
-            for row in (
-                db.query(models.School.id)
-                .filter(
-                    models.School.headmaster_signature_data.isnot(None)
-                )
-                .order_by(models.School.id)
-                .all()
-            )
-        ]
-
-        print(
-            f"Schools with signature data: {len(school_ids)}"
+        # School signatures
+        school_query = (
+            db.query(models.School)
+            .filter(models.School.headmaster_signature_data.isnot(None))
+            .order_by(models.School.id)
+            .yield_per(1)
         )
 
-        for school_id in school_ids:
+        for school in school_query:
             summary["total"] += 1
 
             result = migrate_signature(
                 db,
-                school_id,
+                school,
                 args.apply,
             )
 
