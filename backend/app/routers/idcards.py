@@ -151,7 +151,7 @@ def update_settings(payload: dict, user=Depends(require_school_user), db: Sessio
     year = str(payload.get("established_year") or "").strip()
     if year and (not year.isdigit() or len(year) != 4):
         raise HTTPException(400, "Established year must be a four-digit year")
-    school = db.get(models.School, user.school_id)
+    school = db.query(models.School).options(defer(models.School.headmaster_signature_data)).filter(models.School.id == user.school_id).first()
     if not school:
         raise HTTPException(404, "School not found")
     school.established_year = year or None
@@ -169,7 +169,7 @@ def update_settings(payload: dict, user=Depends(require_school_user), db: Sessio
 @router.post("/settings/signature")
 async def upload_signature(file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
     _require_school_admin(user)
-    school = db.get(models.School, user.school_id)
+    school = db.query(models.School).options(defer(models.School.headmaster_signature_data)).filter(models.School.id == user.school_id).first()
     if not school:
         raise HTTPException(404, "School not found")
     data, mime_type = await _read_image(file)
@@ -205,7 +205,7 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
 
 @router.get("/settings/signature")
 def get_signature(user=Depends(require_school_user), db: Session = Depends(get_db)):
-    school = db.get(models.School, user.school_id)
+    school = db.query(models.School).options(defer(models.School.headmaster_signature_data)).filter(models.School.id == user.school_id).first()
     signature = _school_signature(school)
     if not signature:
         raise HTTPException(404, "Headmaster signature not uploaded")
@@ -241,8 +241,11 @@ def list_students(class_name: str | None = None, search: str | None = None, user
     }
 
 
-def _get_student(db: Session, student_id: int, school_id: int):
-    student = db.query(models.Student).filter(
+def _get_student(db: Session, student_id: int, school_id: int, include_photo: bool = False):
+    query = db.query(models.Student)
+    if not include_photo:
+        query = query.options(defer(models.Student.photo_data))
+    student = query.filter(
         models.Student.id == student_id,
         models.Student.school_id == school_id,
     ).first()
@@ -308,7 +311,7 @@ def delete_photo(student_id: int, user=Depends(require_school_user), db: Session
 
 @router.get("/students/{student_id}/photo")
 def get_photo(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    student = _get_student(db, student_id, user.school_id)
+    student = _get_student(db, student_id, user.school_id, include_photo=True)
     photo = _student_photo(student)
     if not photo:
         raise HTTPException(404, "Student photo not uploaded")
@@ -622,13 +625,13 @@ def _pdf_response(students, school, filename: str):
 @router.get("/bulk.pdf")
 def bulk_cards(class_name: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
     students = _student_query(db, user.school_id, class_name, None).all()
-    school = db.get(models.School, user.school_id)
+    school = db.query(models.School).options(defer(models.School.headmaster_signature_data)).filter(models.School.id == user.school_id).first()
     suffix = f"-class-{class_name}" if class_name else ""
     return _pdf_response(students, school, f"id-cards{suffix}.pdf")
 
 
 @router.get("/{student_id}.pdf")
 def individual_card(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    student = _get_student(db, student_id, user.school_id)
-    school = db.get(models.School, user.school_id)
+    student = _get_student(db, student_id, user.school_id, include_photo=True)
+    school = db.query(models.School).options(defer(models.School.headmaster_signature_data)).filter(models.School.id == user.school_id).first()
     return _pdf_response([student], school, f"id-card-{student.id}.pdf")

@@ -4,7 +4,7 @@ from calendar import monthrange,month_name
 import json
 from fastapi import APIRouter,Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font,Alignment
@@ -32,7 +32,7 @@ def student_obj_key(s):
 def category_group_key(item):
  (cls,cat),_ = item
  return (CLASS_ORDER.get(str(cls),99),CATEGORY_ORDER.get(str(cat).upper(),99),str(cat).upper())
-def school(db,sid):return db.get(School,sid)
+def school(db,sid):return db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id==sid).first()
 def hdr(ws,s,title):
  ws.append([s.school_name]);ws.append([s.address]);ws.append([f'UDISE CODE: {s.udise_code}']);ws.append([title]);
  for r in range(1,5):ws.cell(r,1).font=Font(bold=True);ws.merge_cells(start_row=r,start_column=1,end_row=r,end_column=12)
@@ -411,7 +411,7 @@ def students_x(
         'Admission Date'
     ])
 
-    students = sorted(db.query(Student).filter(
+    students = sorted(db.query(Student).options(defer(Student.photo_data)).filter(
         Student.school_id == u.school_id,
         Student.is_active == True
     ).all(), key=student_obj_key)
@@ -548,7 +548,7 @@ def students_x(
     
 @router.get('/students.pdf')
 def students_p(u=Depends(require_school_user),db:Session=Depends(get_db)):
- s=school(db,u.school_id);story=[];pdf_head(story,s,'Student Directory');students=sorted(db.query(Student).filter(Student.school_id==u.school_id,Student.is_active==True).all(),key=student_obj_key);rows=[['Name','Class','Gender','Admission No','PEN Number',"Father's Name","Mother's Name",'Date of Birth','Age as of 1 Sept','Category','Admission Date']]+[[x.name,x.class_name,x.gender,x.admission_no or '',x.pen_number or '',x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),age_on_sep1(x.date_of_birth),x.category or '',str(x.admission_date or '')] for x in students];t=Table(rows,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s,'Classwise Category Student Lists')
+ s=school(db,u.school_id);story=[];pdf_head(story,s,'Student Directory');students=sorted(db.query(Student).options(defer(Student.photo_data)).filter(Student.school_id==u.school_id,Student.is_active==True).all(),key=student_obj_key);rows=[['Name','Class','Gender','Admission No','PEN Number',"Father's Name","Mother's Name",'Date of Birth','Age as of 1 Sept','Category','Admission Date']]+[[x.name,x.class_name,x.gender,x.admission_no or '',x.pen_number or '',x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),age_on_sep1(x.date_of_birth),x.category or '',str(x.admission_date or '')] for x in students];t=Table(rows,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s,'Classwise Category Student Lists')
  grouped={}
  for st in students: grouped.setdefault((st.class_name,(st.category or 'Unspecified').upper()),[]).append(st)
  for (cls,cat),members in sorted(grouped.items(),key=category_group_key):

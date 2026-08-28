@@ -2,7 +2,7 @@ import json
 from fastapi import APIRouter,Depends,HTTPException
 from datetime import timezone
 from zoneinfo import ZoneInfo
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from ..database import get_db
 from ..auth import require_school_user
 from .. import models,schemas
@@ -34,7 +34,7 @@ def promote(data:schemas.PromotionRequest,u=Depends(require_school_user),db:Sess
  promoted=graduated=skipped=0
  # Server decides the next class from this school's configured order. Client cannot invent Class 11.
  for p in data.promotions:
-  sid=int(p.get('student_id')); s=db.query(models.Student).filter_by(id=sid,school_id=u.school_id).first()
+  sid=int(p.get('student_id')); s=db.query(models.Student).options(defer(models.Student.photo_data)).filter_by(id=sid,school_id=u.school_id).first()
   if not s or not s.is_active: skipped+=1; continue
   current=s.class_name
   if current not in classes: skipped+=1; continue
@@ -110,7 +110,7 @@ def revert_promotion(
         if student_id in reverted_student_ids:
             continue
 
-        student = db.query(models.Student).filter_by(
+        student = db.query(models.Student).options(defer(models.Student.photo_data)).filter_by(
             id=student_id,
             school_id=u.school_id
         ).first()
@@ -192,7 +192,7 @@ def revert_promotion(
         if student_id in restored_student_ids:
             continue
 
-        student = db.query(models.Student).filter_by(
+        student = db.query(models.Student).options(defer(models.Student.photo_data)).filter_by(
             id=student_id,
             school_id=u.school_id
         ).first()
@@ -264,7 +264,7 @@ def logs(limit:int=200,u=Depends(require_school_user),db:Session=Depends(get_db)
   
   subject=x.entity_type
   if x.entity_type=='Student' and x.entity_id:
-   st=db.get(models.Student,int(x.entity_id)); subject=st.name if st else f'Student #{x.entity_id}'
+   st=db.query(models.Student).options(defer(models.Student.photo_data)).filter(models.Student.id == int(x.entity_id)).first(); subject=st.name if st else f'Student #{x.entity_id}'
   labels={'CREATE':'Created','ACTIVATE':'Activated','PROMOTE':'Promoted','GRADUATE':'Completed school','SUBMIT':'Submitted attendance','EDIT':'Edited attendance','IMPORT':'Imported students','REPLACE_DIRECTORY':'Replaced student directory','CALENDAR_RANGE':'Updated school calendar','UPDATE_ASSIGNMENTS':'Updated teacher class assignments','REVERT_PROMOTION':'Reverted promotion'}
   description=f"{labels.get(x.action,x.action.replace('_',' ').title())}: {subject}"
   ist=ZoneInfo('Asia/Kolkata')

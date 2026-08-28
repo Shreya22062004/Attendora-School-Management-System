@@ -3,7 +3,7 @@ from calendar import monthrange
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import func, case, or_
 
 from ..database import get_db
@@ -453,7 +453,7 @@ def monthly_matrix(
         )
 
     students = (
-        db.query(Student)
+        db.query(Student).options(defer(Student.photo_data))
         .filter(
             Student.school_id == sid,
             Student.is_active == True,
@@ -564,7 +564,7 @@ def yearly_matrix(
         )
 
     students = (
-        db.query(Student)
+        db.query(Student).options(defer(Student.photo_data))
         .filter(
             Student.school_id == sid,
             Student.is_active == True,

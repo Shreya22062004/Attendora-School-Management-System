@@ -1,5 +1,5 @@
 from fastapi import APIRouter,Depends,HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import or_,func,case
 from datetime import date
 from typing import List
@@ -21,13 +21,13 @@ def validate(data,db,sid,student_id=None):
  adm,pen=clean(data.admission_no),clean(data.pen_number)
  for col,val,msg in [(models.Student.admission_no,adm,'Admission number already exists'),(models.Student.pen_number,pen,'PEN number already exists')]:
   if val:
-   q=db.query(models.Student).filter(models.Student.school_id==sid,col==val)
+   q=db.query(models.Student.id).filter(models.Student.school_id==sid,col==val)
    if student_id:q=q.filter(models.Student.id!=student_id)
    if q.first():raise HTTPException(400,msg)
  return g,adm,pen
 @router.get('',response_model=List[schemas.StudentOut])
 def list_students(class_name:str|None=None,active_only:bool=True,search:str|None=None,u=Depends(require_school_user),db:Session=Depends(get_db)):
- q=db.query(models.Student).filter(models.Student.school_id==u.school_id)
+ q=db.query(models.Student).options(defer(models.Student.photo_data)).filter(models.Student.school_id==u.school_id)
  if class_name:q=q.filter(models.Student.class_name==class_name)
  if active_only:q=q.filter(models.Student.is_active==True)
  if search and search.strip():

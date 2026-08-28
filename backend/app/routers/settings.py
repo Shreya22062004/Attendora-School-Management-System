@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..database import get_db
 from ..models import School, SchoolConfig
@@ -22,7 +22,7 @@ def get_school_settings(
     u=Depends(require_school_user),
     db: Session = Depends(get_db)
 ):
-    school = db.get(School, u.school_id)
+    school = db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id == u.school_id).first()
 
     if not school:
         raise HTTPException(
@@ -30,7 +30,13 @@ def get_school_settings(
             detail="School not found"
         )
 
-    return school
+    return {
+        "id": school.id,
+        "school_name": school.school_name,
+        "address": school.address,
+        "udise_code": school.udise_code,
+        "established_year": school.established_year,
+    }
 
 
 # ============================================================
@@ -51,7 +57,7 @@ def update_school_settings(
             detail="School administrator access required"
         )
 
-    school = db.get(School, u.school_id)
+    school = db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id == u.school_id).first()
 
     if not school:
         raise HTTPException(
@@ -94,7 +100,7 @@ def update_school_settings(
     # --------------------------------------------------------
 
     existing_school = (
-        db.query(School)
+        db.query(School).options(defer(School.headmaster_signature_data))
         .filter(
             School.udise_code == udise_code,
             School.id != school.id
@@ -119,7 +125,13 @@ def update_school_settings(
     db.commit()
     db.refresh(school)
 
-    return school
+    return {
+        "id": school.id,
+        "school_name": school.school_name,
+        "address": school.address,
+        "udise_code": school.udise_code,
+        "established_year": school.established_year,
+    }
 @router.get("/config")
 def get_school_config(u=Depends(require_school_user), db: Session=Depends(get_db)):
     import json

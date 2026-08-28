@@ -2,7 +2,7 @@ import hashlib
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..database import get_db
 from ..models import (
@@ -150,7 +150,7 @@ def login(
         )
 
     s = (
-        db.get(School, u.school_id)
+        db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id == u.school_id).first()
         if u.school_id
         else None
     )
@@ -175,7 +175,7 @@ def me(
     db: Session = Depends(get_db),
 ):
     s = (
-        db.get(School, u.school_id)
+        db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id == u.school_id).first()
         if u.school_id
         else None
     )
@@ -250,7 +250,7 @@ def create_user(
         else u.school_id
     )
 
-    if not sid or not db.get(School, sid):
+    if not sid or not db.query(School.id).filter(School.id == sid).first():
         raise HTTPException(
             status_code=400,
             detail="Valid school required",
@@ -320,7 +320,7 @@ def create_school(
         )
 
     existing_school = (
-        db.query(School)
+        db.query(School).options(defer(School.headmaster_signature_data))
         .filter(
             School.udise_code
             == data.udise_code.strip()
@@ -407,7 +407,7 @@ def schools(
         )
 
     all_schools = (
-        db.query(School)
+        db.query(School).options(defer(School.headmaster_signature_data))
         .order_by(School.school_name)
         .all()
     )
@@ -431,7 +431,7 @@ def update_school(
             detail="Super admin access required",
         )
 
-    s = db.get(School, school_id)
+    s = db.query(School).options(defer(School.headmaster_signature_data)).filter(School.id == school_id).first()
 
     if not s:
         raise HTTPException(
@@ -440,7 +440,7 @@ def update_school(
         )
 
     duplicate = (
-        db.query(School)
+        db.query(School).options(defer(School.headmaster_signature_data))
         .filter(
             School.udise_code
             == data.udise_code.strip(),
