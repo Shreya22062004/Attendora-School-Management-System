@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base,engine,SessionLocal
 from .models import User,School,SchoolConfig
-from .routers import students,attendance,reports,calendar,auth,settings,exports,backup,academic,idcards
+from .routers import students,attendance,reports,calendar,auth,settings,exports,backup,academic,idcards,staff
 Base.metadata.create_all(bind=engine)
 # Lightweight additive migration for existing PostgreSQL databases.
 # Production deployments should replace this with Alembic migrations.
@@ -33,6 +33,10 @@ def additive_migrate():
    'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature_key VARCHAR',
    'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature_url VARCHAR',
    'ALTER TABLE schools ADD COLUMN IF NOT EXISTS headmaster_signature_mime_type VARCHAR',
+   '''CREATE TABLE IF NOT EXISTS staff (id SERIAL PRIMARY KEY, school_id INTEGER NOT NULL REFERENCES schools(id), user_id INTEGER REFERENCES users(id), name VARCHAR NOT NULL, designation VARCHAR, father_husband_name VARCHAR, level VARCHAR, date_of_birth DATE, mobile_number VARCHAR, blood_group VARCHAR, staff_type VARCHAR NOT NULL DEFAULT 'STAFF', employee_id VARCHAR, gender VARCHAR, photo_storage_key VARCHAR, photo_storage_url VARCHAR, photo_mime_type VARCHAR, is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''',
+   'CREATE INDEX IF NOT EXISTS ix_staff_school_id ON staff (school_id)',
+   'CREATE INDEX IF NOT EXISTS ix_staff_staff_type ON staff (staff_type)',
+   'CREATE INDEX IF NOT EXISTS ix_staff_mobile_number ON staff (mobile_number)',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_status VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_date DATE',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS exit_reason VARCHAR',
@@ -91,6 +95,7 @@ for r in [
     exports.router,
     backup.router,
     academic.router,
+    staff.router,
     idcards.router,
 ]:
     app.include_router(r)

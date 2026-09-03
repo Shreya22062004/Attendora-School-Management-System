@@ -11,3 +11,4 @@ reportlab
 xlrd
 Pillow
 cloudinary
+python-docx

@@ -1,613 +1,103 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 
-// These dimensions retain the existing ID-card photo-frame ratio
-// (56% of an 85 mm card by 43% of a 110 mm card). The editor bakes the
-// user's chosen framing into a normal image file, so every existing display
-// and PDF path uses precisely the same result without new database metadata.
-const PHOTO_CROP_WIDTH = 1006;
+const PHOTO_CROP_WIDTH = 800;
 const PHOTO_CROP_HEIGHT = 1000;
 
-function PhotoAdjuster({ file, student, onCancel, onSave }) {
+export function PhotoAdjuster({ file, person, onCancel, onSave }) {
   const frameRef = useRef(null);
-  const [source, setSource] = useState("");
-  const [naturalSize, setNaturalSize] = useState(null);
-  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [dragStart, setDragStart] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file);
-    setSource(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [file]);
-
-  useEffect(() => {
-    if (!frameRef.current) return undefined;
-    const updateSize = () => {
-      const rect = frameRef.current?.getBoundingClientRect();
-      if (rect) setFrameSize({ width: rect.width, height: rect.height });
-    };
-    updateSize();
-    if (!window.ResizeObserver) {
-      window.addEventListener("resize", updateSize);
-      return () => window.removeEventListener("resize", updateSize);
-    }
-    const observer = new ResizeObserver(updateSize);
-    observer.observe(frameRef.current);
-    return () => observer.disconnect();
-  }, []);
-
-  const baseScale = naturalSize && frameSize.width && frameSize.height
-    ? Math.min(frameSize.width / naturalSize.width, frameSize.height / naturalSize.height)
-    : 1;
-  const imageWidth = naturalSize ? naturalSize.width * baseScale * zoom : 0;
-  const imageHeight = naturalSize ? naturalSize.height * baseScale * zoom : 0;
-
-  const clampPosition = next => {
-    if (!frameSize.width || !frameSize.height || !imageWidth || !imageHeight) return next;
-    // Keep at least a small part of the image inside the frame while allowing
-    // deliberate letterboxing at the minimum zoom level.
-    const maxX = Math.max(0, (frameSize.width + imageWidth) / 2 - 24);
-    const maxY = Math.max(0, (frameSize.height + imageHeight) / 2 - 24);
-    return {
-      x: Math.max(-maxX, Math.min(maxX, next.x)),
-      y: Math.max(-maxY, Math.min(maxY, next.y))
-    };
-  };
-
-  const reset = () => {
-    setZoom(1);
-    setPosition({ x: 0, y: 0 });
-  };
-
+  const [source, setSource] = useState(""); const [natural, setNatural] = useState(null);
+  const [frame, setFrame] = useState({ width: 0, height: 0 }); const [zoom, setZoom] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 }); const [drag, setDrag] = useState(null); const [saving, setSaving] = useState(false);
+  useEffect(() => { const url = URL.createObjectURL(file); setSource(url); return () => URL.revokeObjectURL(url); }, [file]);
+  useEffect(() => { const update = () => { const rect = frameRef.current?.getBoundingClientRect(); if (rect) setFrame({ width: rect.width, height: rect.height }); }; update(); const observer = new ResizeObserver(update); if (frameRef.current) observer.observe(frameRef.current); return () => observer.disconnect(); }, []);
+  const base = natural && frame.width && frame.height ? Math.min(frame.width / natural.width, frame.height / natural.height) : 1;
+  const width = natural ? natural.width * base * zoom : 0; const height = natural ? natural.height * base * zoom : 0;
+  const clamp = next => ({ x: Math.max(-(frame.width + width) / 2 + 20, Math.min((frame.width + width) / 2 - 20, next.x)), y: Math.max(-(frame.height + height) / 2 + 20, Math.min((frame.height + height) / 2 - 20, next.y)) });
   const save = async () => {
-    if (!naturalSize || !frameSize.width || !frameSize.height) return;
-    setSaving(true);
-    setError("");
+    if (!natural || !frame.width) return; setSaving(true);
     try {
-      const image = new Image();
-      await new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = () => reject(new Error("This image could not be opened"));
-        image.src = source;
-      });
-      const canvas = document.createElement("canvas");
-      canvas.width = PHOTO_CROP_WIDTH;
-      canvas.height = PHOTO_CROP_HEIGHT;
-      const context = canvas.getContext("2d");
-      context.fillStyle = "#f7fbfe";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      const outputScale = canvas.width / frameSize.width;
-      const drawWidth = imageWidth * outputScale;
-      const drawHeight = imageHeight * outputScale;
-      context.drawImage(
-        image,
-        (canvas.width - drawWidth) / 2 + position.x * outputScale,
-        (canvas.height - drawHeight) / 2 + position.y * outputScale,
-        drawWidth,
-        drawHeight
-      );
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.95));
-      if (!blob) throw new Error("Could not prepare the adjusted image");
-      const filename = `${file.name.replace(/\.[^.]+$/, "") || "student-photo"}-id-card.jpg`;
-      await onSave(new File([blob], filename, { type: "image/jpeg" }));
-    } catch (saveError) {
-      setError(saveError.message || "Could not prepare the photo");
-    } finally {
-      setSaving(false);
-    }
+      const image = new Image(); await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = source; });
+      const canvas = document.createElement("canvas"); canvas.width = PHOTO_CROP_WIDTH; canvas.height = PHOTO_CROP_HEIGHT;
+      const context = canvas.getContext("2d"); context.fillStyle = "#fff7ee"; context.fillRect(0, 0, canvas.width, canvas.height);
+      const scale = canvas.width / frame.width; context.drawImage(image, (canvas.width - width * scale) / 2 + position.x * scale, (canvas.height - height * scale) / 2 + position.y * scale, width * scale, height * scale);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .95)); if (!blob) throw new Error("Photo could not be prepared");
+      await onSave(new File([blob], `${person.name || "photo"}-id-card.jpg`, { type: "image/jpeg" }));
+    } finally { setSaving(false); }
   };
-
-  return <div className="modal-backdrop photo-adjuster-backdrop" role="dialog" aria-modal="true" aria-labelledby="photo-adjuster-title">
-    <section className="modal-card photo-adjuster-card">
-      <div>
-        <h2 id="photo-adjuster-title">Adjust Photo</h2>
-        <p className="muted">{student.name} — drag to position and use the slider to zoom.</p>
-      </div>
-      <div
-        ref={frameRef}
-        className="photo-adjuster-frame"
-        onPointerDown={event => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          setDragStart({ x: event.clientX, y: event.clientY, position });
-        }}
-        onPointerMove={event => {
-          if (!dragStart) return;
-          setPosition(clampPosition({
-            x: dragStart.position.x + event.clientX - dragStart.x,
-            y: dragStart.position.y + event.clientY - dragStart.y
-          }));
-        }}
-        onPointerUp={() => setDragStart(null)}
-        onPointerCancel={() => setDragStart(null)}
-      >
-        {source && <img
-          src={source}
-          alt="Adjust student photo"
-          draggable="false"
-          className="photo-adjuster-image"
-          onLoad={event => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-          onError={() => setError("This image could not be opened")}
-          style={naturalSize ? {
-            width: imageWidth,
-            height: imageHeight,
-            left: `calc(50% + ${position.x}px)`,
-            top: `calc(50% + ${position.y}px)`
-          } : undefined}
-        />}
-        <span className="photo-adjuster-frame-label">ID-card photo area</span>
-      </div>
-      <label className="photo-adjuster-zoom">
-        Zoom
-        <div className="photo-adjuster-zoom-control">
-          <button type="button" aria-label="Zoom out" onClick={() => setZoom(current => Math.max(1, current - 0.1))} disabled={!naturalSize || saving}>−</button>
-          <input
-            type="range"
-            min="1"
-            max="3"
-            step="0.01"
-            value={zoom}
-            onChange={event => setZoom(Number(event.target.value))}
-            disabled={!naturalSize || saving}
-          />
-          <button type="button" aria-label="Zoom in" onClick={() => setZoom(current => Math.min(3, current + 0.1))} disabled={!naturalSize || saving}>+</button>
-        </div>
-      </label>
-      {error && <p className="photo-adjuster-error">{error}</p>}
-      <div className="modal-actions photo-adjuster-actions">
-        <button type="button" onClick={reset} disabled={saving}>Reset</button>
-        <span />
-        <button type="button" onClick={onCancel} disabled={saving}>Cancel</button>
-        <button type="button" className="primary-btn" onClick={save} disabled={!naturalSize || saving}>
-          {saving ? "Saving..." : "Confirm Photo"}
-        </button>
-      </div>
-    </section>
-  </div>;
+  return <div className="modal-backdrop photo-adjuster-backdrop"><section className="modal-card photo-adjuster-card"><div><h2>Adjust Photo</h2><p className="muted">{person.name} - drag to position and use the slider to zoom.</p></div><div ref={frameRef} className="photo-adjuster-frame" onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); setDrag({ x: event.clientX, y: event.clientY, position }); }} onPointerMove={event => drag && setPosition(clamp({ x: drag.position.x + event.clientX - drag.x, y: drag.position.y + event.clientY - drag.y }))} onPointerUp={() => setDrag(null)}>{source && <img src={source} alt="Adjust photo" draggable="false" className="photo-adjuster-image" onLoad={event => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} style={natural ? { width, height, left: `calc(50% + ${position.x}px)`, top: `calc(50% + ${position.y}px)` } : undefined} />}<span className="photo-adjuster-frame-label">20 x 25 mm stamp-size photo</span></div><label className="photo-adjuster-zoom">Zoom<div className="photo-adjuster-zoom-control"><button type="button" onClick={() => setZoom(value => Math.max(1, value - .1))}>-</button><input type="range" min="1" max="3" step=".01" value={zoom} onChange={event => setZoom(Number(event.target.value))} /><button type="button" onClick={() => setZoom(value => Math.min(3, value + .1))}>+</button></div></label><div className="modal-actions photo-adjuster-actions"><button type="button" onClick={() => { setZoom(1); setPosition({ x: 0, y: 0 }); }}>Reset</button><span/><button type="button" onClick={onCancel} disabled={saving}>Cancel</button><button type="button" className="primary-btn" onClick={save} disabled={!natural || saving}>{saving ? "Saving..." : "Confirm Photo"}</button></div></section></div>;
 }
 
 function ProtectedImage({ path, src: directSrc = "", alt, className }) {
   const [src, setSrc] = useState("");
-  useEffect(() => {
-    let url = "";
-    if (directSrc) {
-      setSrc(directSrc);
-      return undefined;
-    }
-    if (!path) { setSrc(""); return undefined; }
-    api.get(path, { responseType: "blob" }).then(response => {
-      url = URL.createObjectURL(response.data);
-      setSrc(url);
-    }).catch(() => setSrc(""));
-    return () => { if (url) URL.revokeObjectURL(url); };
-  }, [path, directSrc]);
-  return src
-    ? <img className={className} src={src} alt={alt} />
-    : <span className="id-image-placeholder">No image</span>;
+  useEffect(() => { let url = ""; if (directSrc) { setSrc(directSrc); return undefined; } if (!path) return undefined; api.get(path, { responseType: "blob" }).then(response => { url = URL.createObjectURL(response.data); setSrc(url); }).catch(() => setSrc("")); return () => url && URL.revokeObjectURL(url); }, [path, directSrc]);
+  return src ? <img className={className} src={src} alt={alt} /> : null;
 }
 
-function IDCard({ student, settings, photoSrc, signatureSrc, useProtectedImages = false, refreshKey }) {
-  const date = value => value ? value.split("-").reverse().join("/") : "";
-  const photo = student.photo_uploaded
-    ? (useProtectedImages
-      ? <ProtectedImage key={`${student.id}-${refreshKey}`} src={student.photo_url} path={`/idcards/students/${student.id}/photo`} className="idcard-preview-photo-image" alt={`${student.name} photo`} />
-      : photoSrc ? <img className="idcard-preview-photo-image" src={photoSrc} alt={`${student.name} photo`} /> : <span className="id-image-placeholder">PHOTO PENDING</span>)
-    : <span className="id-image-placeholder">PHOTO PENDING</span>;
+function BloodGroupDrop({ value }) {
+  return <div className="blood-drop-wrap" aria-label={`Blood group ${value || "not set"}`}>
+    <svg className="blood-drop-svg" viewBox="0 0 100 125" aria-hidden="true"><path d="M50 4 C43 18 15 45 15 70 C15 96 31 113 50 113 C69 113 85 96 85 70 C85 45 57 18 50 4 Z" /></svg>
+    <span>{value || ""}</span>
+  </div>;
+}
 
-  return <article className="idcard-preview">
-    <div className="idcard-preview-header">
-      <div className="idcard-preview-school">{settings.school_name || "SCHOOL NAME"}</div>
-      {settings.established_year && <div className="idcard-preview-estd">ESTD - {settings.established_year}</div>}
-      {settings.address && <div className="idcard-preview-address">{settings.address}</div>}
-      {settings.udise_code && <div className="idcard-preview-udise">UDISE CODE - {settings.udise_code}</div>}
+export function PersonIDCard({ person, settings, photoSrc, signatureSrc, protectedImages = false, refreshKey }) {
+  const student = person.kind === "student";
+  const date = value => value ? value.split("-").reverse().join("/") : "";
+  const photoPath = student ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`;
+  const photo = protectedImages
+    ? <ProtectedImage key={`${person.kind}-${person.id}-${refreshKey}`} src={person.photo_url} path={photoPath} className="portrait-card-photo-image" alt={`${person.name} photo`} />
+    : photoSrc
+      ? <img className="portrait-card-photo-image" src={photoSrc} alt={`${person.name} photo`} />
+      : null;
+
+  // Keep this list aligned with the original student card: there is intentionally NO class field.
+  const rows = student
+    ? [["FATHER'S NAME", person.father_name], ["MOTHER'S NAME", person.mother_name], ["CONTACT NO", person.contact_number], ["PEN NUMBER", person.pen_number], ["DATE OF BIRTH", date(person.date_of_birth)]]
+    : [["DESIGNATION", person.designation], ["FATHER/HUSBAND", person.father_husband_name], ["LEVEL", person.level], ["MOBILE NO", person.mobile_number], ["DATE OF BIRTH", date(person.date_of_birth)]];
+
+  return <article className="portrait-idcard">
+    <header className="portrait-card-header">
+      <img src="/odisha-govt-logo.png" className="odisha-logo" alt="Odisha Government"/>
+      <div className="portrait-school-identity">
+        <strong>{settings.school_name || ""}</strong>
+        <span>{settings.address || ""}</span><span className="portrait-school-udise">UDISE CODE: {settings.udise_code || ""}</span>
+      </div>
+    </header>
+    <div className="portrait-card-title">IDENTITY CARD</div>
+    <div className="portrait-card-photo-row">
+      <div className="portrait-card-photo">{photo}</div>
+      <BloodGroupDrop value={person.blood_group}/>
     </div>
-    <div className="idcard-preview-wave" />
-    <div className="idcard-preview-photo">{photo}</div>
-    <div className="idcard-preview-name">{student.name}</div>
-    <div className={`idcard-preview-info${student.contact_number || student.blood_group ? " has-extra-details" : ""}`}>
-      <div><b>FATHER NAME :</b><span>{student.father_name || "-"}</span></div>
-      <div><b>MOTHER NAME :</b><span>{student.mother_name || "-"}</span></div>
-      {student.contact_number && <div><b>CONTACT NO :</b><span>{student.contact_number}</span></div>}
-      {student.blood_group && <div><b>BLOOD GROUP :</b><span>{student.blood_group}</span></div>}
-      {student.pen_number && <div><b>PEN NUMBER :</b><span>{student.pen_number}</span></div>}
-      {student.date_of_birth && <div><b>DATE OF BIRTH :</b><span>{date(student.date_of_birth)}</span></div>}
+    <div className="portrait-card-details">
+      <h3>{person.name}</h3>
+      <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}:</dt><dd>{value || ""}</dd></div>)}</dl>
     </div>
-    <div className="idcard-preview-signature">
-      {settings.has_headmaster_signature && (useProtectedImages
-        ? <ProtectedImage key={`signature-${refreshKey}`} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="idcard-preview-signature-image" alt="Headmaster signature" />
-        : signatureSrc && <img className="idcard-preview-signature-image" src={signatureSrc} alt="Headmaster signature" />)}
-      <span className="idcard-preview-signature-line" />
-      <b>HEADMASTER</b>
+    <div className="portrait-card-bottom">
+      <div className="portrait-card-department">SCHOOL AND MASS EDUCATION DEPARTMENT</div>
+      <div className="portrait-signature-area">
+        {(protectedImages ? settings.has_headmaster_signature : signatureSrc) && (protectedImages
+          ? <ProtectedImage key={`sign-${refreshKey}`} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="portrait-signature" alt="Headmaster signature"/>
+          : <img className="portrait-signature" src={signatureSrc} alt="Headmaster signature"/>)}
+        <span>HEADMASTER</span>
+      </div>
+      <div className="portrait-card-orange-curve" aria-hidden="true" />
     </div>
   </article>;
 }
 
 export default function IDCards() {
   const isAdmin = (localStorage.getItem("school_role") || "teacher") === "school_admin";
-  const [students, setStudents] = useState([]);
-  const [classes, setClasses] = useState([]);
-  const [settings, setSettings] = useState({
-    school_name: "",
-    established_year: "",
-    address: "",
-    udise_code: "",
-    headmaster_signature_url: "",
-    has_headmaster_signature: false
-  });
-  const [year, setYear] = useState("");
-  const [search, setSearch] = useState("");
-  const [classFilter, setClassFilter] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [previewId, setPreviewId] = useState(null);
-  const [printJob, setPrintJob] = useState(null);
-  const [photoEditor, setPhotoEditor] = useState(null);
-
-  const load = async () => {
-    try {
-      const [studentResponse, configResponse, settingsResponse] = await Promise.all([
-        api.get("/idcards/students"),
-        api.get("/settings/config"),
-        api.get("/idcards/settings")
-      ]);
-      setStudents(studentResponse.data.students || []);
-      setClasses(configResponse.data.classes || []);
-      setSettings(settingsResponse.data);
-      setYear(settingsResponse.data.established_year || "");
-    } catch (error) {
-      setMessage(error.response?.data?.detail || "Could not load ID card information");
-    }
-  };
-
+  const [students, setStudents] = useState([]), [staff, setStaff] = useState([]), [classes, setClasses] = useState([]), [settings, setSettings] = useState({});
+  const [cardType, setCardType] = useState("ALL"), [classFilter, setClassFilter] = useState(""), [search, setSearch] = useState(""), [year, setYear] = useState("");
+  const [message, setMessage] = useState(""), [busy, setBusy] = useState(""), [previewKey, setPreviewKey] = useState(""), [refreshKey, setRefreshKey] = useState(0), [printJob, setPrintJob] = useState(null), [photoEditor, setPhotoEditor] = useState(null);
+  const load = async () => { try { const [studentResponse, staffResponse, configResponse, settingsResponse] = await Promise.all([api.get("/idcards/students"), api.get("/staff"), api.get("/settings/config"), api.get("/idcards/settings")]); setStudents((studentResponse.data.students || []).map(item => ({ ...item, kind: "student" }))); setStaff((staffResponse.data || []).map(item => ({ ...item, kind: "staff" }))); setClasses(configResponse.data.classes || []); setSettings(settingsResponse.data); setYear(settingsResponse.data.established_year || ""); } catch (error) { setMessage(error.response?.data?.detail || "Could not load ID cards"); } };
   useEffect(() => { load(); }, []);
-
-  const shown = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return students.filter(student =>
-      (!classFilter || student.class_name === classFilter) &&
-      (!term || student.name.toLowerCase().includes(term))
-    );
-  }, [students, classFilter, search]);
-
-  const uploaded = shown.filter(student => student.photo_uploaded).length;
-  const previewStudent = shown.find(student => student.id === previewId) || shown[0];
-
-  const saveYear = async () => {
-    setBusy("year"); setMessage("");
-    try {
-      await api.put("/idcards/settings", { established_year: year });
-      setMessage("Established year saved.");
-      await load();
-    } catch (error) {
-      setMessage(error.response?.data?.detail || "Could not save settings");
-    } finally { setBusy(""); }
-  };
-
-  const uploadSignature = async file => {
-    if (!file) return;
-    setBusy("signature"); setMessage("");
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      await api.post("/idcards/settings/signature", form);
-      setMessage("Headmaster signature saved.");
-      await load();
-      setRefreshKey(key => key + 1);
-    } catch (error) {
-      setMessage(error.response?.data?.detail || "Could not upload signature");
-    } finally { setBusy(""); }
-  };
-
-  const uploadPhoto = async (student, file) => {
-    if (!file) return false;
-    setBusy(`photo-${student.id}`); setMessage("");
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      await api.post(`/idcards/students/${student.id}/photo`, form);
-      setMessage(`Photo saved for ${student.name}.`);
-      await load();
-      setRefreshKey(key => key + 1);
-      return true;
-    } catch (error) {
-      setMessage(error.response?.data?.detail || "Could not upload photo");
-      return false;
-    } finally { setBusy(""); }
-  };
-
-  const openPhotoEditor = (student, file) => {
-    if (file) setPhotoEditor({ student, file });
-  };
-
-  const saveAdjustedPhoto = async file => {
-    const saved = await uploadPhoto(photoEditor.student, file);
-    if (saved) setPhotoEditor(null);
-  };
-
-  const printCards = async (studentsToPrint, onlyLoadablePhotos = false) => {
-    if (!studentsToPrint.length) return;
-    setBusy("download"); setMessage("");
-    try {
-      const toDataUrl = async path => {
-        const response = await api.get(path, { responseType: "blob" });
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = reject;
-          reader.readAsDataURL(response.data);
-        });
-      };
-      const loadVerifiedPhoto = async student => {
-        const source = await toDataUrl(`/idcards/students/${student.id}/photo`);
-        await new Promise((resolve, reject) => {
-          const image = new Image();
-          image.onload = resolve;
-          image.onerror = () => reject(new Error("Student photo is invalid"));
-          image.src = source;
-        });
-        return [student.id, source];
-      };
-      let printableStudents = studentsToPrint;
-      let photoEntries;
-      if (onlyLoadablePhotos) {
-        // `photo_uploaded` originates from the backend storage check. Validate
-        // each returned image too, so stale or corrupt media never creates a card.
-        const candidates = studentsToPrint.filter(student => student.photo_uploaded);
-        const results = await Promise.allSettled(candidates.map(loadVerifiedPhoto));
-        photoEntries = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
-        const validPhotoIds = new Set(photoEntries.map(([studentId]) => studentId));
-        printableStudents = candidates.filter(student => validPhotoIds.has(student.id));
-        if (!printableStudents.length) {
-          setMessage("No student photos are available. Please upload photos before downloading all cards.");
-          return;
-        }
-      } else {
-        photoEntries = await Promise.all(studentsToPrint.map(async student => [
-          student.id,
-          student.photo_uploaded ? await toDataUrl(`/idcards/students/${student.id}/photo`) : ""
-        ]));
-      }
-      const signatureSrc = settings.has_headmaster_signature ? await toDataUrl("/idcards/settings/signature") : "";
-      const pages = Array.from({ length: Math.ceil(printableStudents.length / 4) }, (_, index) => printableStudents.slice(index * 4, index * 4 + 4));
-      setPrintJob({ pages, photoSources: Object.fromEntries(photoEntries), signatureSrc });
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      if (document.fonts?.ready) await document.fonts.ready;
-      const images = Array.from(document.querySelectorAll(".idcard-print-root img"));
-      await Promise.all(images.map(image => image.complete ? Promise.resolve() : new Promise(resolve => {
-        image.addEventListener("load", resolve, { once: true });
-        image.addEventListener("error", resolve, { once: true });
-      })));
-      // Chrome can return from window.print() before a large multi-page PDF has
-      // finished consuming the print DOM. Keep all cards mounted until its print
-      // lifecycle completes; otherwise the saved bulk PDF can be empty/corrupt.
-      await new Promise(resolve => {
-        const completePrint = () => {
-          window.removeEventListener("afterprint", completePrint);
-          setTimeout(resolve, 250);
-        };
-        window.addEventListener("afterprint", completePrint, { once: true });
-        window.print();
-      });
-    } catch (error) {
-      setMessage(error.response?.data?.detail || "Could not prepare ID cards for printing");
-    } finally {
-      // Keep the hidden print sheet alive after the dialog closes. Some Windows
-      // PDF drivers finish writing a large document after `afterprint` fires;
-      // unmounting here can truncate the generated file.
-      setBusy("");
-    }
-  };
-
-  return <>
-    <header className="page-head">
-      <div>
-        <p className="eyebrow">STUDENT IDENTITY</p>
-        <h1>ID Cards</h1>
-        <p className="muted">85 × 110 mm portrait card • 4 cards per A4 sheet • choose Save as PDF at Actual Size.</p>
-      </div>
-      <button
-        className="primary-btn"
-        onClick={() => printCards(shown, true)}
-        disabled={busy === "download"}
-      >
-        {busy === "download" ? "Generating..." : "Download All ID Cards"}
-      </button>
-    </header>
-
-    {message && <div className="alert">{message}</div>}
-
-    <section className="panel">
-      <div className="panel-title-row">
-        <div>
-          <h2>School Settings / ID Card Settings</h2>
-          <p className="muted">School details are applied automatically to every card.</p>
-        </div>
-      </div>
-
-      <div className="form-grid">
-        <label>
-          Established Year
-          <input
-            value={year}
-            maxLength="4"
-            inputMode="numeric"
-            placeholder="e.g. 1889"
-            disabled={!isAdmin}
-            onChange={event => setYear(event.target.value.replace(/\D/g, ""))}
-          />
-        </label>
-
-        {isAdmin && (
-          <button className="primary-btn" type="button" disabled={busy === "year"} onClick={saveYear}>
-            {busy === "year" ? "Saving..." : "Save Year"}
-          </button>
-        )}
-
-        <label>
-          Headmaster Signature
-          <input
-            type="file"
-            accept="image/png,image/jpeg"
-            disabled={!isAdmin || busy === "signature"}
-            onChange={event => {
-              uploadSignature(event.target.files?.[0]);
-              event.target.value = "";
-            }}
-          />
-        </label>
-      </div>
-
-      <div className="signature-preview">
-        {settings.has_headmaster_signature
-          ? <ProtectedImage key={refreshKey} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="signature-image" alt="Current headmaster signature" />
-          : <span className="muted">No signature uploaded.</span>}
-        <span>
-          {settings.has_headmaster_signature
-            ? "Current signature — upload another image to replace it."
-            : "Upload the signature once; it will be used on every ID card."}
-        </span>
-      </div>
-
-      {!isAdmin && <p className="muted">Only the school administrator can change ID card settings or student photos.</p>}
-    </section>
-
-    {previewStudent && (
-      <section className="panel idcard-preview-panel">
-        <div className="panel-title-row">
-          <div>
-            <h2>Print Design Preview</h2>
-            <p className="muted">
-              85 × 110 mm portrait card. Clean school branding, large photo, readable student details, and signature.
-            </p>
-          </div>
-          <span className="badge">{previewStudent.name}</span>
-        </div>
-
-        <div className="idcard-preview-wrap">
-          <IDCard student={previewStudent} settings={settings} useProtectedImages refreshKey={refreshKey} />
-        </div>
-      </section>
-    )}
-
-    <section className="panel">
-      <div className="panel-title-row">
-        <div>
-          <h2>Student ID Cards</h2>
-          <p className="muted">
-            {shown.length} Students | {uploaded} Photos Uploaded | {shown.length - uploaded} Photos Pending
-          </p>
-        </div>
-        <div className="filters">
-          <select value={classFilter} onChange={event => setClassFilter(event.target.value)}>
-            <option value="">All Classes</option>
-            {classes.map(className => (
-              <option key={className} value={className}>
-                {className === "UKG/KG2/PP1" ? className : `Class ${className}`}
-              </option>
-            ))}
-          </select>
-          <input
-            className="search"
-            placeholder="Search student..."
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-          />
-        </div>
-      </div>
-
-      <p className="muted">Cards with pending photos generate with a clearly marked photo placeholder.</p>
-
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Student</th><th>Class</th><th>Photo</th><th>Status</th><th>Action</th></tr>
-          </thead>
-          <tbody>
-            {shown.map(student => (
-              <tr key={student.id} className={previewStudent?.id === student.id ? "idcard-selected-row" : ""}>
-                <td><strong>{student.name}</strong></td>
-                <td><span className="badge">{student.class_name}</span></td>
-                <td>
-                  <div className="student-photo-preview">
-                    {student.photo_uploaded
-                      ? <ProtectedImage
-                          key={`${student.id}-${refreshKey}`}
-                          src={student.photo_url}
-                          path={`/idcards/students/${student.id}/photo`}
-                          className="student-photo-image"
-                          alt={`${student.name} photo`}
-                        />
-                      : <span className="id-image-placeholder">No photo</span>}
-                  </div>
-                </td>
-                <td>{student.photo_uploaded ? "Uploaded" : "Not Uploaded"}</td>
-                <td>
-                  <div className="row-actions">
-                    <button type="button" className="edit-btn" onClick={() => setPreviewId(student.id)}>Preview</button>
-                    {isAdmin && (
-                      <>
-                      <label className="upload-btn">
-                        {busy === `photo-${student.id}` ? "Uploading..." : student.photo_uploaded ? "Change Photo" : "Upload Photo"}
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg"
-                          disabled={busy === `photo-${student.id}`}
-                          onChange={event => {
-                            openPhotoEditor(student, event.target.files?.[0]);
-                            event.target.value = "";
-                          }}
-                        />
-                      </label>
-                      <label className="upload-btn">
-                        {busy === `photo-${student.id}` ? "Uploading..." : "Use Camera"}
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg"
-                          capture="environment"
-                          disabled={busy === `photo-${student.id}`}
-                          onChange={event => {
-                            openPhotoEditor(student, event.target.files?.[0]);
-                            event.target.value = "";
-                          }}
-                        />
-                      </label>
-                      </>
-                    )}
-                    <button type="button" onClick={() => printCards([student])}>
-                      Generate ID Card
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {!shown.length && <div className="empty">No students found for this filter.</div>}
-    </section>
-
-    {printJob && <div className="idcard-print-root">
-      {printJob.pages.map((page, pageIndex) => <div className="idcard-print-page" key={pageIndex}>
-        {page.map(student => <IDCard
-          key={student.id}
-          student={student}
-          settings={settings}
-          photoSrc={printJob.photoSources[student.id]}
-          signatureSrc={printJob.signatureSrc}
-        />)}
-      </div>)}
-    </div>}
-    {photoEditor && <PhotoAdjuster
-      file={photoEditor.file}
-      student={photoEditor.student}
-      onCancel={() => setPhotoEditor(null)}
-      onSave={saveAdjustedPhoto}
-    />}
-  </>;
+  const people = useMemo(() => [...students, ...staff].filter(person => { const typeMatch = cardType === "ALL" || (cardType === "STUDENTS" ? person.kind === "student" : person.kind === "staff" && person.staff_type === cardType); const classMatch = person.kind !== "student" || !classFilter || person.class_name === classFilter; const term = search.trim().toLowerCase(); const searchMatch = !term || [person.name, person.contact_number, person.mobile_number, person.class_name, person.designation].some(value => String(value || "").toLowerCase().includes(term)); return typeMatch && classMatch && searchMatch; }), [students, staff, cardType, classFilter, search]);
+  const preview = people.find(person => `${person.kind}-${person.id}` === previewKey) || people[0];
+  const uploadSignature = async file => { if (!file) return; setBusy("signature"); try { const form = new FormData(); form.append("file", file); await api.post("/idcards/settings/signature", form); await load(); setRefreshKey(value => value + 1); } catch (error) { setMessage(error.response?.data?.detail || "Could not upload signature"); } finally { setBusy(""); } };
+  const saveYear = async () => { try { await api.put("/idcards/settings", { established_year: year }); await load(); } catch (error) { setMessage(error.response?.data?.detail || "Could not save year"); } };
+  const uploadStudentPhoto = async file => { const person = photoEditor.person; setBusy("photo"); try { const form = new FormData(); form.append("file", file); await api.post(`/idcards/students/${person.id}/photo`, form); setPhotoEditor(null); await load(); setRefreshKey(value => value + 1); } catch (error) { setMessage(error.response?.data?.detail || "Could not upload photo"); } finally { setBusy(""); } };
+  const printCards = async selected => { if (!selected.length) return; setBusy("print"); try { const toData = async path => { const response = await api.get(path, { responseType: "blob" }); return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(response.data); }); }; const photoEntries = await Promise.allSettled(selected.filter(person => person.photo_uploaded).map(async person => [`${person.kind}-${person.id}`, await toData(person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`)])); const photos = Object.fromEntries(photoEntries.filter(result => result.status === "fulfilled").map(result => result.value)); const printable = selected; const signature = settings.has_headmaster_signature ? await toData("/idcards/settings/signature") : ""; setPrintJob({ pages: Array.from({ length: Math.ceil(printable.length / 9) }, (_, index) => printable.slice(index * 9, index * 9 + 9)), photos, signature }); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); window.print(); } catch (error) { setMessage(error.response?.data?.detail || "Could not prepare ID cards for printing"); } finally { setBusy(""); } };
+  return <><header className="page-head"><div><p className="eyebrow">SCHOOL IDENTITY</p><h1>ID Cards</h1><p className="muted">54 x 86 mm portrait cards - print at Actual Size / 100%.</p></div><button className="primary-btn" disabled={busy === "print"} onClick={() => printCards(people)}>{busy === "print" ? "Preparing..." : "Print / Save PDF"}</button></header>{message && <div className="alert">{message}</div>}<section className="panel"><div className="form-grid"><label>Established Year<input value={year} disabled={!isAdmin} maxLength="4" onChange={event => setYear(event.target.value.replace(/\D/g, ""))}/></label>{isAdmin && <button type="button" className="primary-btn" onClick={saveYear}>Save Year</button>}<label>Headmaster Signature<input type="file" accept="image/png,image/jpeg" disabled={!isAdmin || busy === "signature"} onChange={event => { uploadSignature(event.target.files?.[0]); event.target.value = ""; }}/></label></div></section>{preview && <section className="panel idcard-preview-panel"><div className="panel-title-row"><div><h2>Card Preview</h2><p className="muted">The live preview and A4 print sheet use the same 54 x 86 mm portrait layout. Cards without photos are also printed with an empty photo box.</p></div><span className="badge">{preview.name}</span></div><div className="idcard-preview-wrap"><PersonIDCard person={preview} settings={settings} protectedImages refreshKey={refreshKey}/></div></section>}<section className="panel"><div className="panel-title-row"><div><h2>Student, Staff and SMC ID Cards</h2><p className="muted">All selected people are included in bulk printing; cards without photos keep an empty photo box.</p></div><div className="filters"><select value={cardType} onChange={event => setCardType(event.target.value)}><option value="ALL">All</option><option value="STUDENTS">Students</option><option value="TEACHER">Teachers</option><option value="STAFF">Staff</option><option value="SMC_MEMBER">SMC Members</option></select>{(cardType === "ALL" || cardType === "STUDENTS") && <select value={classFilter} onChange={event => setClassFilter(event.target.value)}><option value="">All Classes</option>{classes.map(item => <option key={item} value={item}>{item}</option>)}</select>}<input className="search" placeholder="Search name, mobile, class or designation" value={search} onChange={event => setSearch(event.target.value)}/></div></div><div className="table-wrap"><table><thead><tr><th>Person</th><th>Type</th><th>Class / Designation</th><th>Photo</th><th>Actions</th></tr></thead><tbody>{people.map(person => <tr key={`${person.kind}-${person.id}`}><td><strong>{person.name}</strong></td><td>{person.kind === "student" ? "Student" : person.staff_type.replace("_", " ")}</td><td>{person.kind === "student" ? `${person.class_name}${person.section ? ` / ${person.section}` : ""}` : person.designation || "-"}</td><td>{person.photo_uploaded ? "Uploaded" : "Pending"}</td><td><div className="row-actions"><button type="button" className="edit-btn" onClick={() => setPreviewKey(`${person.kind}-${person.id}`)}>Preview</button>{isAdmin && <><label className="upload-btn">{person.photo_uploaded ? "Change Photo" : "Upload Photo"}<input type="file" accept="image/png,image/jpeg" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label><label className="upload-btn">Use Camera<input type="file" accept="image/png,image/jpeg" capture="environment" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label>{person.photo_uploaded && <button type="button" className="danger-btn" onClick={async () => { try { await api.delete(person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`); await load(); setRefreshKey(value => value + 1); } catch (error) { setMessage(error.response?.data?.detail || "Could not remove photo"); } }}>Remove Photo</button>}</>}<button type="button" onClick={() => printCards([person])}>Generate ID Card</button></div></td></tr>)}</tbody></table></div>{!people.length && <div className="empty">No matching people found.</div>}</section>{printJob && <div className="idcard-print-root">{printJob.pages.map((page, index) => <div className="idcard-print-page" key={index}>{page.map(person => <PersonIDCard key={`${person.kind}-${person.id}`} person={person} settings={settings} photoSrc={printJob.photos[`${person.kind}-${person.id}`]} signatureSrc={printJob.signature}/>)}</div>)}</div>}{photoEditor && <PhotoAdjuster file={photoEditor.file} person={photoEditor.person} onCancel={() => setPhotoEditor(null)} onSave={uploadStudentPhoto}/>}</>;
 }

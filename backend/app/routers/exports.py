@@ -6,15 +6,17 @@ from fastapi import APIRouter,Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, defer
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font,Alignment
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4,A3,landscape
-from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spacer,PageBreak
+from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spacer,PageBreak,Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet
 from ..database import get_db
 from ..auth import require_school_user
-from ..models import School,Student,Attendance,SchoolConfig
+from ..models import School,Student,Staff,Attendance,SchoolConfig
+from .idcards import _student_photo, _staff_photo
 from .reports import summary_query,studentwise_query,monthly_matrix,yearly_matrix,day_status
 from collections import defaultdict
 router=APIRouter(prefix='/exports',tags=['Exports'])
@@ -43,6 +45,16 @@ def pdf_response(story,name,pagesize=landscape(A4)):
  b=BytesIO();SimpleDocTemplate(b,pagesize=pagesize,rightMargin=18,leftMargin=18,topMargin=20,bottomMargin=20).build(story);b.seek(0);return StreamingResponse(b,media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename={name}'})
 def pdf_head(story,s,title):
  st=getSampleStyleSheet();story += [Paragraph(s.school_name,st['Title']),Paragraph(s.address,st['Normal']),Paragraph(f'UDISE CODE: {s.udise_code}',st['Normal']),Paragraph(title,st['Heading2']),Spacer(1,8)]
+
+def pdf_photo(source, width=15, height=20):
+ try:
+  if not source: return Paragraph('No photo', getSampleStyleSheet()['Normal'])
+  image = RLImage(BytesIO(source[0]), width=width, height=height)
+  image.hAlign = 'CENTER'
+  return image
+ except Exception:
+  return Paragraph('No photo', getSampleStyleSheet()['Normal'])
+
 def summary_sheet(wb,db,sid,start,end,title):
  s=school(db,sid);ws=wb.active;ws.title='Attendance Summary';hdr(ws,s,title);ws.append([]);ws.append(['Class','Boys Present','Girls Present','Total Present','Absent','Marked','Boys Strength','Girls Strength','Total Strength'])
  for r in summary_query(db,sid,start,end):ws.append([r['class_name'],r['boys_present'],r['girls_present'],r['total_present'],r['total_absent'],r['total_marked'],r['boys_total'],r['girls_total'],r['total_students']])
@@ -408,10 +420,14 @@ def students_x(
         'Date of Birth',
         'Age as of 1 Sept',
         'Category',
-        'Admission Date'
+        'Admission Date',
+        'Mobile Number',
+        'Blood Group',
+        'Photo (Embedded)',
+        'Photo URL (Backup)'
     ])
 
-    students = sorted(db.query(Student).options(defer(Student.photo_data)).filter(
+    students = sorted(db.query(Student).filter(
         Student.school_id == u.school_id,
         Student.is_active == True
     ).all(), key=student_obj_key)
@@ -428,8 +444,23 @@ def students_x(
             str(st.date_of_birth or ''),
             age_on_sep1(st.date_of_birth),
             st.category or 'Unspecified',
-            str(st.admission_date or '')
+            str(st.admission_date or ''),
+            st.contact_number or '',
+            st.blood_group or '',
+            '',
+            st.photo_storage_url or ''
         ])
+        row_number = ws.max_row
+        photo = _student_photo(st)
+        if photo:
+            try:
+                xl_photo = XLImage(BytesIO(photo[0]))
+                xl_photo.width = 72
+                xl_photo.height = 90
+                ws.add_image(xl_photo, f'N{row_number}')
+                ws.row_dimensions[row_number].height = 72
+            except Exception:
+                ws.cell(row_number, 14).value = 'Photo unavailable'
 
     # Better widths for Student Directory
     ws.column_dimensions['A'].width = 35
@@ -443,6 +474,10 @@ def students_x(
     ws.column_dimensions['I'].width = 18
     ws.column_dimensions['J'].width = 18
     ws.column_dimensions['K'].width = 20
+    ws.column_dimensions['L'].width = 20
+    ws.column_dimensions['M'].width = 16
+    ws.column_dimensions['N'].width = 14
+    ws.column_dimensions['O'].width = 48
 
     ws.freeze_panes = 'A7'
 
@@ -545,14 +580,93 @@ def students_x(
         wb,
         'student-directory.xlsx'
     )
-    
+
+@router.get('/staff.xlsx')
+def staff_x(staff_type:str|None=None,u=Depends(require_school_user),db:Session=Depends(get_db)):
+    s=school(db,u.school_id); wb=Workbook(); ws=wb.active; ws.title='Staff Directory'; hdr(ws,s,'Staff Directory'); ws.append([])
+    ws.append(['Staff Name','Designation','Staff Type','Father/Husband Name','Level','Date of Birth','Mobile Number','Blood Group','Employee/Staff ID','Photo (Embedded)','Photo URL (Backup)','Login Account'])
+    query=db.query(Staff).filter(Staff.school_id==u.school_id,Staff.is_active==True)
+    if staff_type: query=query.filter(Staff.staff_type==staff_type.upper())
+    for item in query.order_by(Staff.staff_type,Staff.name).all():
+        login_username = item.user.username if item.user else ''
+        ws.append([item.name,item.designation or '',item.staff_type,item.father_husband_name or '',item.level or '',str(item.date_of_birth or ''),item.mobile_number or '',item.blood_group or '',item.employee_id or '', '',item.photo_storage_url or '', login_username])
+        row_number = ws.max_row
+        photo = _staff_photo(item)
+        if photo:
+            try:
+                xl_photo = XLImage(BytesIO(photo[0]))
+                xl_photo.width = 72
+                xl_photo.height = 90
+                ws.add_image(xl_photo, f'J{row_number}')
+                ws.row_dimensions[row_number].height = 72
+            except Exception:
+                ws.cell(row_number, 10).value = 'Photo unavailable'
+    for index,width in enumerate([28,24,16,28,14,16,18,14,18,14,48,24],1): ws.column_dimensions[get_column_letter(index)].width=width
+    ws.freeze_panes='A6'; ws.auto_filter.ref=f'A6:L{ws.max_row}'
+    return xlsx_response(wb,'staff-directory.xlsx')
+
 @router.get('/students.pdf')
 def students_p(u=Depends(require_school_user),db:Session=Depends(get_db)):
- s=school(db,u.school_id);story=[];pdf_head(story,s,'Student Directory');students=sorted(db.query(Student).options(defer(Student.photo_data)).filter(Student.school_id==u.school_id,Student.is_active==True).all(),key=student_obj_key);rows=[['Name','Class','Gender','Admission No','PEN Number',"Father's Name","Mother's Name",'Date of Birth','Age as of 1 Sept','Category','Admission Date']]+[[x.name,x.class_name,x.gender,x.admission_no or '',x.pen_number or '',x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),age_on_sep1(x.date_of_birth),x.category or '',str(x.admission_date or '')] for x in students];t=Table(rows,repeatRows=1);style_table(t);story += [t,PageBreak()];pdf_head(story,s,'Classwise Category Student Lists')
+ s=school(db,u.school_id)
+ students=sorted(db.query(Student).filter(Student.school_id==u.school_id,Student.is_active==True).all(),key=student_obj_key)
+ story=[]; pdf_head(story,s,'Student Directory')
+ rows=[['Photo','Name','Class','Gender','Admission No','PEN Number',"Father's Name","Mother's Name",'DOB','Mobile','Blood Group']]
+ for x in students:
+  rows.append([pdf_photo(_student_photo(x)),x.name,x.class_name,x.gender,x.admission_no or '',x.pen_number or '',x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),x.contact_number or '',x.blood_group or ''])
+ t=Table(rows,repeatRows=1,colWidths=[45,95,48,42,70,65,85,85,55,65,50])
+ style_table(t); story.append(t); story.append(PageBreak()); pdf_head(story,s,'Classwise Category Student Lists')
  grouped={}
  for st in students: grouped.setdefault((st.class_name,(st.category or 'Unspecified').upper()),[]).append(st)
  for (cls,cat),members in sorted(grouped.items(),key=category_group_key):
   members=sorted(members,key=lambda x:(GENDER_ORDER.get(x.gender,2),(x.name or '').lower()))
   story.append(Paragraph(f'Class {cls} - {cat}: {len(members)} student(s)',getSampleStyleSheet()['Heading3']))
-  rows=[['No.','Student Name','Gender',"Father's Name","Mother's Name",'DOB','Age']]+[[i+1,x.name,x.gender,x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),age_on_sep1(x.date_of_birth)] for i,x in enumerate(members)];tt=Table(rows,repeatRows=1,colWidths=[30,130,50,130,130,70,40]);style_table(tt);story += [tt,Spacer(1,8)]
- return pdf_response(story,'student-directory.pdf')
+  rows=[['Photo','No.','Student Name','Gender',"Father's Name","Mother's Name",'DOB','Age','Mobile','Blood']]
+  for i,x in enumerate(members):
+   rows.append([pdf_photo(_student_photo(x),12,16),i+1,x.name,x.gender,x.father_name or '',x.mother_name or '',str(x.date_of_birth or ''),age_on_sep1(x.date_of_birth),x.contact_number or '',x.blood_group or ''])
+  tt=Table(rows,repeatRows=1,colWidths=[35,28,110,48,105,105,55,35,70,45]);style_table(tt);story += [tt,Spacer(1,8)]
+ return pdf_response(story,'student-directory.pdf',landscape(A3))
+
+@router.get('/staff.pdf')
+def staff_p(staff_type:str|None=None,u=Depends(require_school_user),db:Session=Depends(get_db)):
+    """Export the current school's staff directory with embedded photos.
+
+    This endpoint deliberately uses a compact, robust table so Cloudinary-backed
+    photos are embedded in the PDF and the export does not depend on browser
+    access to photo URLs.
+    """
+    s = school(db, u.school_id)
+    query = db.query(Staff).filter(Staff.school_id == u.school_id, Staff.is_active == True)
+    if staff_type:
+        query = query.filter(Staff.staff_type == staff_type.upper())
+    staff = sorted(query.all(), key=lambda x: (x.staff_type or '', (x.name or '').lower()))
+
+    story = []
+    pdf_head(story, s, 'Staff Directory')
+    rows = [['Photo','Staff Name','Designation','Type','Father/Husband Name','Level','DOB','Mobile','Blood Group','Staff ID','Login']]
+    for item in staff:
+        rows.append([
+            pdf_photo(_staff_photo(item), 22, 29),
+            Paragraph(str(item.name or ''), getSampleStyleSheet()['Normal']),
+            Paragraph(str(item.designation or ''), getSampleStyleSheet()['Normal']),
+            str(item.staff_type or ''),
+            Paragraph(str(item.father_husband_name or ''), getSampleStyleSheet()['Normal']),
+            str(item.level or ''),
+            str(item.date_of_birth or ''),
+            str(item.mobile_number or ''),
+            str(item.blood_group or ''),
+            str(item.employee_id or ''),
+            str(item.user.username if item.user else ''),
+        ])
+
+    t = Table(rows, repeatRows=1, colWidths=[42,100,85,52,100,42,60,72,55,62,72])
+    style_table(t)
+    t.setStyle(TableStyle([
+        ('VALIGN',(0,1),(-1,-1),'MIDDLE'),
+        ('ALIGN',(0,1),(0,-1),'CENTER'),
+        ('LEFTPADDING',(0,0),(-1,-1),3),
+        ('RIGHTPADDING',(0,0),(-1,-1),3),
+        ('TOPPADDING',(0,0),(-1,-1),3),
+        ('BOTTOMPADDING',(0,0),(-1,-1),3),
+    ]))
+    story.append(t)
+    return pdf_response(story, 'staff-directory.pdf', landscape(A3))

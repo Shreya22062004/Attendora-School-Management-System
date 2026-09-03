@@ -7,6 +7,12 @@ class StudentCreate(BaseModel):
  @classmethod
  def empty(cls,v): return None if v=='' else v
 class StudentUpdate(StudentCreate): is_active:bool=True
+class StaffCreate(BaseModel):
+ name:str; designation:Optional[str]=None; father_husband_name:Optional[str]=None; level:Optional[str]=None; date_of_birth:Optional[date]=None; mobile_number:Optional[str]=None; blood_group:Optional[str]=None; staff_type:str='STAFF'; employee_id:Optional[str]=None; gender:Optional[str]=None; user_id:Optional[int]=None
+ @field_validator('designation','father_husband_name','level','mobile_number','blood_group','employee_id','gender',mode='before')
+ @classmethod
+ def empty_staff(cls,v): return None if v=='' else v
+class StaffUpdate(StaffCreate): is_active:bool=True
 class StudentOut(StudentCreate):
  id:int; is_active:bool; exit_status:Optional[str]=None; exit_date:Optional[date]=None; exit_reason:Optional[str]=None
  @computed_field
