@@ -420,7 +420,7 @@ def _docx_response(people, school, filename):
             row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
 
         header = table.cell(0, 0).merge(table.cell(0, 1))
-        header.text = f"{school.school_name or ""}\n{school.address or ""}"
+        header.text = f"{school.school_name or ''}\n{school.address or ''}"
         for paragraph in header.paragraphs:
             for run in paragraph.runs:
                 run.font.size = Pt(7)
