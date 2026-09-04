@@ -1,10 +1,11 @@
 """School-scoped 54 x 85 mm portrait ID cards for students and personnel."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image, ImageOps
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -50,6 +51,32 @@ async def _read_image(upload: UploadFile):
     return data, mime
 
 
+def _remove_white_background_bytes(data: bytes) -> tuple[bytes, str]:
+    """Turn a white paper background into transparency while preserving ink/seal."""
+    try:
+        image = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGBA")
+
+        # Work on a grayscale copy instead of looping through every pixel in
+        # Python. This keeps signature uploads fast even for large camera scans.
+        gray = image.convert("L")
+
+        def alpha_for_white_background(value):
+            if value >= 242:
+                return 0
+            if value <= 185:
+                return 255
+            return int(255 * (242 - value) / (242 - 185))
+
+        alpha = gray.point(alpha_for_white_background)
+        image.putalpha(alpha)
+
+        output = BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return output.getvalue(), "image/png"
+    except Exception as error:
+        raise HTTPException(400, "Could not process the signature image") from error
+
+
 def _file_path(relative_path):
     if not relative_path: return None
     candidate = (UPLOAD_DIR / relative_path).resolve()
@@ -64,10 +91,13 @@ def _legacy_image(path):
 
 
 def _student_photo(student):
-    if student.photo_storage_key:
+    # Local DB bytes are the fast/reliable primary copy. Cloudinary remains a
+    # fallback for older records that were uploaded before this optimization.
+    if student.photo_data:
+        return student.photo_data, student.photo_mime_type or "image/jpeg"
+    if student.photo_storage_key or student.photo_storage_url:
         try: return get_media(student.photo_storage_key, student.photo_storage_url)
         except MediaStorageError: pass
-    if student.photo_data: return student.photo_data, student.photo_mime_type or "image/jpeg"
     return _legacy_image(student.photo)
 
 
@@ -78,11 +108,13 @@ def _staff_photo(staff):
 
 
 def _school_signature(school):
-    if school and school.headmaster_signature_key:
-        try: return get_media(school.headmaster_signature_key, school.headmaster_signature_url)
-        except MediaStorageError: pass
+    # Use the transparent DB copy first. This avoids a Cloudinary round trip for
+    # every PDF request and keeps the signature available if Cloudinary is slow.
     if school and school.headmaster_signature_data:
         return school.headmaster_signature_data, school.headmaster_signature_mime_type or "image/png"
+    if school and (school.headmaster_signature_key or school.headmaster_signature_url):
+        try: return get_media(school.headmaster_signature_key, school.headmaster_signature_url)
+        except MediaStorageError: pass
     return _legacy_image(school.headmaster_signature if school else None)
 
 
@@ -140,19 +172,45 @@ def update_settings(payload: dict, user=Depends(require_school_user), db: Sessio
 
 @router.post("/settings/signature")
 async def upload_signature(file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
-    _admin(user); school = _school(db, user.school_id); data, mime = await _read_image(file)
+    _admin(user)
+    school = _school(db, user.school_id, include_signature=True)
+    raw, _ = await _read_image(file)
+    data, mime = _remove_white_background_bytes(raw)
+
     previous = school.headmaster_signature_key
-    try: public_id, secure_url = put_media(f"attendora/signatures/{school.id}_headmaster", data, mime)
-    except MediaStorageError as error: raise HTTPException(503, str(error)) from error
-    school.headmaster_signature_key = public_id; school.headmaster_signature_url = secure_url; school.headmaster_signature_mime_type = mime
-    try: db.commit()
+    public_id = None
+    secure_url = ""
+    try:
+        # Cloudinary is still useful for external/media backup, but the
+        # transparent PNG is also stored in the database so PDF generation
+        # does not depend on a remote image download.
+        public_id, secure_url = put_media(
+            f"attendora/signatures/{school.id}_headmaster", data, mime
+        )
+    except MediaStorageError:
+        # Do not fail the upload just because the remote media service is slow.
+        # The DB copy is sufficient for the ID-card preview and PDF.
+        public_id = None
+        secure_url = ""
+
+    school.headmaster_signature_data = data
+    school.headmaster_signature_mime_type = mime
+    school.headmaster_signature_key = public_id
+    school.headmaster_signature_url = secure_url
+
+    try:
+        db.commit()
     except Exception as error:
         db.rollback()
-        if not previous:
+        if public_id and not previous:
             try: delete_media(public_id)
             except MediaStorageError: pass
-        raise HTTPException(500, "Could not save signature reference") from error
-    return {"message": "Headmaster signature saved"}
+        raise HTTPException(500, "Could not save signature") from error
+
+    return {
+        "message": "Headmaster signature saved with transparent background",
+        "photo_url": secure_url,
+    }
 
 
 @router.get("/settings/signature")
@@ -172,19 +230,42 @@ def list_students(class_name: str | None = None, search: str | None = None, user
 
 @router.post("/students/{student_id}/photo")
 async def upload_student_photo(student_id: int, file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
-    _admin(user); item = _student(db, student_id, user.school_id); raw, _ = await _read_image(file); previous = item.photo_storage_key
+    _admin(user)
+    item = _student(db, student_id, user.school_id, include_photo=True)
+    raw, _ = await _read_image(file)
+    previous = item.photo_storage_key
+
     try:
-        data, mime = optimize_student_photo(raw); public_id, secure_url = put_media(f"attendora/students/{item.id}", data, mime)
-    except MediaStorageError as error: raise HTTPException(503, str(error)) from error
-    item.photo_storage_key = public_id; item.photo_storage_url = secure_url; item.photo_mime_type = mime
-    try: db.commit()
+        data, mime = optimize_student_photo(raw)
+    except MediaStorageError as error:
+        raise HTTPException(400, str(error)) from error
+
+    public_id = None
+    secure_url = ""
+    try:
+        public_id, secure_url = put_media(
+            f"attendora/students/{item.id}", data, mime
+        )
+    except MediaStorageError:
+        # Keep the DB copy even if Cloudinary is temporarily unavailable.
+        public_id = None
+        secure_url = ""
+
+    item.photo_data = data
+    item.photo_mime_type = mime
+    item.photo_storage_key = public_id
+    item.photo_storage_url = secure_url
+
+    try:
+        db.commit()
     except Exception as error:
         db.rollback()
-        if not previous:
+        if public_id and not previous:
             try: delete_media(public_id)
             except MediaStorageError: pass
-        raise HTTPException(500, "Could not save photo reference") from error
-    return {"message": "Student photo saved"}
+        raise HTTPException(500, "Could not save photo") from error
+
+    return {"message": "Student photo saved", "photo_url": secure_url}
 
 
 @router.delete("/students/{student_id}/photo")
@@ -210,8 +291,15 @@ def _draw_image(pdf, source, x, y, width, height, placeholder="", signature=Fals
     try:
         image = ImageOps.exif_transpose(Image.open(BytesIO(source) if isinstance(source, bytes) else source)).convert("RGBA")
         if signature:
-            white = Image.new("RGBA", image.size, "white"); bbox = ImageChops.difference(image, white).convert("RGB").point(lambda value: 0 if value < 18 else 255).getbbox()
-            if bbox: image = image.crop(bbox)
+            # Also clean older signatures that were uploaded before the
+            # transparent-background fix.
+            png_bytes, _ = _remove_white_background_bytes(
+                source if isinstance(source, bytes) else Path(source).read_bytes()
+            )
+            image = Image.open(BytesIO(png_bytes)).convert("RGBA")
+            bbox = image.getbbox()
+            if bbox:
+                image = image.crop(bbox)
         iw, ih = image.size; scale = min(width / iw, height / ih); dw, dh = iw * scale, ih * scale
         pdf.drawImage(ImageReader(image), x + (width - dw) / 2, y + (height - dh) / 2, dw, dh, mask="auto")
     except Exception:
@@ -265,7 +353,7 @@ def _draw_centered_lines(pdf, lines, center_x, first_y, font_name, font_size, le
         pdf.drawCentredString(center_x, first_y - index * leading, line)
 
 
-def _draw_card(pdf, person, school, x, y):
+def _draw_card(pdf, person, school, x, y, photo_data=None, signature_data=None):
     """Draw the 54 x 85 mm portrait card to match the React preview."""
     orange = colors.HexColor("#ec6414")
     dark = colors.HexColor("#42230f")
@@ -378,7 +466,7 @@ def _draw_card(pdf, person, school, x, y):
         stroke=1,
     )
 
-    photo = _student_photo(person) if isinstance(person, models.Student) else _staff_photo(person)
+    photo = photo_data if photo_data is not None else (_student_photo(person) if isinstance(person, models.Student) else _staff_photo(person))
     _draw_image(pdf, photo[0] if photo else None, photo_x, photo_y, photo_w, photo_h)
 
     _drop(pdf, x + 46.9 * mm, photo_y + 8.9 * mm, getattr(person, "blood_group", None))
@@ -459,7 +547,7 @@ def _draw_card(pdf, person, school, x, y):
     pdf.drawCentredString(x + 26.5 * mm, bottom_y + 1.65 * mm, department)
 
     # Signature above HEADMASTER, both on the cream area.
-    signature = _school_signature(school)
+    signature = signature_data if signature_data is not None else _school_signature(school)
     sig_x = x + 38.0 * mm
     sig_w, sig_h = 14.0 * mm, 4.0 * mm
     if signature:
@@ -470,16 +558,44 @@ def _draw_card(pdf, person, school, x, y):
     pdf.drawCentredString(sig_x + sig_w / 2, bottom_y + 4.45 * mm, "HEADMASTER")
 
 
+def _person_photo(person):
+    try:
+        return _student_photo(person) if isinstance(person, models.Student) else _staff_photo(person)
+    except Exception:
+        return None
+
+
 def _pdf_response(people, school, filename):
-    stream = BytesIO(); pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
+    # Fetch remote Cloudinary media concurrently once per PDF request. The old
+    # browser-print flow fetched every protected image in React and then waited
+    # for the print renderer; this keeps the PDF generation server-side and
+    # avoids repeated signature downloads.
+    people = list(people)
+    signature = _school_signature(school)
+    photos = {}
+    if people:
+        with ThreadPoolExecutor(max_workers=min(16, len(people))) as executor:
+            futures = {executor.submit(_person_photo, person): index for index, person in enumerate(people)}
+            for future in as_completed(futures):
+                photos[futures[future]] = future.result()
+
+    stream = BytesIO()
+    pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
     for index, person in enumerate(people):
         slot = index % (COLS * ROWS)
-        if slot == 0 and index: pdf.showPage()
+        if slot == 0 and index:
+            pdf.showPage()
         column, row = slot % COLS, slot // COLS
-        x = PAGE_MARGIN_X + column * (CARD_WIDTH + CUT_GAP); y = A4[1] - PAGE_MARGIN_Y - CARD_HEIGHT - row * (CARD_HEIGHT + CUT_GAP)
-        _draw_card(pdf, person, school, x, y)
-    pdf.save(); stream.seek(0)
-    return StreamingResponse(stream, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        x = PAGE_MARGIN_X + column * (CARD_WIDTH + CUT_GAP)
+        y = A4[1] - PAGE_MARGIN_Y - CARD_HEIGHT - row * (CARD_HEIGHT + CUT_GAP)
+        _draw_card(pdf, person, school, x, y, photo_data=photos.get(index), signature_data=signature)
+    pdf.save()
+    stream.seek(0)
+    return StreamingResponse(
+        stream,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 def _docx_response(people, school, filename):
@@ -556,6 +672,53 @@ def _docx_response(people, school, filename):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+
+@router.post("/print.pdf")
+def print_selected_cards(payload: dict, user=Depends(require_school_user), db: Session = Depends(get_db)):
+    """Generate a real A4 PDF for exactly the cards selected in the ID-card table."""
+    student_ids = [int(value) for value in (payload.get("student_ids") or [])]
+    staff_ids = [int(value) for value in (payload.get("staff_ids") or [])]
+    if not student_ids and not staff_ids:
+        raise HTTPException(400, "Select at least one person to generate the PDF")
+
+    students = {
+        item.id: item
+        for item in db.query(models.Student).filter(
+            models.Student.school_id == user.school_id,
+            models.Student.is_active == True,
+            models.Student.id.in_(student_ids),
+        ).all()
+    } if student_ids else {}
+    staff = {
+        item.id: item
+        for item in db.query(models.Staff).filter(
+            models.Staff.school_id == user.school_id,
+            models.Staff.is_active == True,
+            models.Staff.id.in_(staff_ids),
+        ).all()
+    } if staff_ids else {}
+
+    missing_students = [value for value in student_ids if value not in students]
+    missing_staff = [value for value in staff_ids if value not in staff]
+    if missing_students or missing_staff:
+        raise HTTPException(404, "One or more selected people could not be found")
+
+    # Preserve the exact order shown/selected by the frontend: students first
+    # in the request, followed by staff. Duplicate IDs are removed.
+    people = []
+    seen = set()
+    for value in student_ids:
+        if value not in seen:
+            people.append(students[value])
+            seen.add(value)
+    for value in staff_ids:
+        key = ("staff", value)
+        if key not in seen:
+            people.append(staff[value])
+            seen.add(key)
+
+    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "id-cards.pdf")
 
 
 @router.get("/staff/bulk.pdf")

@@ -76,6 +76,58 @@
 .photo-adjuster-actions span{flex:1}
 @media(max-width:560px){.photo-adjuster-backdrop{padding:12px}.photo-adjuster-card{padding:18px}.photo-adjuster-frame{width:min(100%,320px)}}
 
+/* ID-card photo upload summary */
+.idcard-photo-summary {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+  margin:0 0 16px;
+}
+
+.idcard-summary-card {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 15px;
+  border:1px solid #e2e8f0;
+  border-radius:12px;
+  background:#f8fafc;
+  color:#475569;
+  font-size:13px;
+  font-weight:650;
+}
+
+.idcard-summary-card strong {
+  font-size:22px;
+  line-height:1;
+  color:#172033;
+}
+
+.idcard-summary-card.uploaded {
+  background:#f0fdf4;
+  border-color:#bbf7d0;
+}
+
+.idcard-summary-card.uploaded strong {
+  color:#15803d;
+}
+
+.idcard-summary-card.pending {
+  background:#fff7ed;
+  border-color:#fed7aa;
+}
+
+.idcard-summary-card.pending strong {
+  color:#c2410c;
+}
+
+@media(max-width:700px) {
+  .idcard-photo-summary {
+    grid-template-columns:1fr;
+  }
+}
+
 .idcard-print-root {
   display:none
 }

@@ -45,7 +45,7 @@ def get_bytes(public_id: str, secure_url: str | None = None) -> tuple[bytes, str
         url = secure_url
         if not url:
             url, _ = cloudinary.utils.cloudinary_url(public_id, resource_type="image", secure=True)
-        with urlopen(url, timeout=20) as response:
+        with urlopen(url, timeout=5) as response:
             return response.read(), response.headers.get_content_type() or "image/jpeg"
     except Exception as error:
         raise MediaStorageError("Could not retrieve media from Cloudinary") from error
