@@ -76,40 +76,491 @@
 .photo-adjuster-actions span{flex:1}
 @media(max-width:560px){.photo-adjuster-backdrop{padding:12px}.photo-adjuster-card{padding:18px}.photo-adjuster-frame{width:min(100%,320px)}}
 
-.idcard-print-root{display:none}
+.idcard-print-root {
+  display:none
+}
+
+/* ================================================================
+   PORTRAIT ID CARD — 54 x 85 mm
+   The preview and browser-print card use the same fixed composition.
+   ================================================================ */
+.portrait-idcard {
+  width:54mm;
+  height:85mm;
+  position:relative;
+  overflow:hidden;
+  border:0.35mm solid #42230f;
+  border-radius:1.1mm;
+  background:#fff7ee;
+  color:#312014;
+  font-family:Arial,Helvetica,sans-serif;
+  box-shadow:0 10px 24px rgba(91,47,15,.18);
+  box-sizing:border-box;
+}
+
+/* ---------- Orange school header ---------- */
+.portrait-card-header {
+  position:absolute;
+  left:0;
+  top:0;
+  width:100%;
+  height:18mm;
+  margin:0;
+  padding:0;
+  background:#ec6414;
+  color:#fff;
+  box-sizing:border-box;
+  overflow:hidden;
+  z-index:1;
+}
+
+.odisha-logo {
+  position: absolute;
+  left: 2.0mm;
+  top: 1.8mm;
+
+  width: 14.5mm;
+  height: 15.5mm;
+
+  object-fit: contain;
+  display: block;
+}
+
+.portrait-school-identity {
+  position:absolute;
+  left:17mm;
+  right:1.3mm;
+  top:1.8mm;
+  height:15.5mm;
+  min-width:0;
+  text-align:center;
+  display:flex;
+  flex-direction:column;
+  justify-content:flex-start;
+  align-items:center;
+  gap:0;
+  overflow:hidden;
+}
+
+.portrait-school-identity strong,
+.portrait-school-identity span {
+  display:block;
+  width:100%;
+  margin:0;
+  padding:0;
+  color:#fff;
+  overflow:hidden;
+  text-overflow:clip;
+}
+
+.portrait-school-identity strong {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+
+  font-size: 2.8mm;
+  line-height: 1.05;
+  letter-spacing: 0;
+  font-weight: 950;
+  white-space: normal;
+
+  max-height: 5.4mm;
+}
+
+.portrait-school-identity span {
+  font-size: 1.9mm;
+  line-height: 1.15;
+  font-weight: 900;
+  white-space: normal;
+  max-height: 3.8mm;
+}
+
+.portrait-school-identity > span:not(.portrait-school-udise) {
+  position: absolute;
+  top: 7.2mm;
+  left: 0;
+  width: 100%;
+
+  font-size: 1.7mm;
+  line-height: 1.15;
+  font-weight: 550;
+  white-space: normal;
+
+  max-height: 3.8mm;
+}
+
+.portrait-school-identity .portrait-school-udise {
+  position: absolute;
+  top: 13.0mm;
+  left: 0;
+  width: 100%;
+
+  margin: 0;
+  font-size: 1.8mm;
+  line-height: 1.05;
+  font-weight: 550;
+  white-space: nowrap;
+  max-height: none;
+}
+
+/* ---------- Main card ---------- */
+.portrait-card-title {
+  position:absolute;
+  left:0;
+  right:0;
+  top:19.2mm;
+  height:5.2mm;
+  margin:0;
+  padding:0;
+  box-sizing:border-box;
+  text-align:center;
+  font-weight:750;
+  color:#253b9b;
+  font-size:3.15mm;
+  line-height:1;
+  letter-spacing:.04em;
+  z-index:2;
+}
+
+.portrait-card-photo-row {
+  position:absolute;
+  left:0;
+  right:0;
+  top:23.15mm;
+  width:100%;
+  height:28mm;
+  margin:0;
+  padding:0;
+  display:flex;
+  justify-content:center;
+  align-items:flex-start;
+  box-sizing:border-box;
+  z-index:2;
+}
+
+.portrait-card-photo {
+  width:22.2mm;
+  height:27.2mm;
+  margin:0;
+  overflow:hidden;
+  border:0.28mm solid #ec6414;
+  border-radius:.35mm;
+  background:#ec6414;
+  display:grid;
+  place-items:center;
+  box-sizing:border-box;
+}
+
+.portrait-card-photo-image {
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  background:#fff7ee;
+  display:block;
+}
+
+.blood-drop-wrap {
+  position:absolute;
+  right:6.0mm;
+  top:7.3mm;
+  width:7.0mm;
+  height:10.5mm;
+  display:grid;
+  place-items:center;
+}
+
+.blood-drop-svg {
+  position:absolute;
+  width:100%;
+  height:100%;
+  display:block;
+  fill:#c6292f;
+}
+
+.blood-drop-wrap span {
+  position:relative;
+  z-index:1;
+  color:#fff;
+  font-size:2.05mm;
+  font-weight:550;
+  line-height:1;
+}
+
+/* ---------- Name and details ---------- */
+.portrait-card-details {
+  position:absolute;
+  left:0;
+  right:0;
+  top:50.0mm;
+  height:24.5mm;
+  margin:0;
+  padding:0 3.5mm;
+  box-sizing:border-box;
+  text-align:center;
+  z-index:2;
+}
+
+.portrait-card-details h3 {
+  margin:2.0mm 0 1.5mm;
+  color:#42230f;
+  font-size:3.15mm;
+  line-height:1;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  text-transform:uppercase;
+  font-weight:550;
+}
+
+.card-type-label {
+  display:block;
+  margin:1mm 0 2.5mm;
+  font-size:1.35mm;
+  color:#d4520f;
+  letter-spacing:.04em;
+  line-height:1.05;
+}
+
+.portrait-card-details dl {
+  margin:0;
+  padding:0;
+  text-align:left;
+  display:grid;
+  gap:1.65mm;
+  font-size:1.95mm;
+  line-height:1;
+}
+
+.portrait-card-details dl div {
+  display:grid;
+  grid-template-columns:42% 58%;
+  min-width:0;
+}
+
+.portrait-card-details dt {
+  font-weight:550;
+  color:#7b3e11;
+  white-space:nowrap;
+}
+
+.portrait-card-details dd {
+  margin:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  color:#252525;
+  font-weight:550;
+}
+
+/* ---------- Bottom reference-style wave ---------- */
+.portrait-card-bottom {
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  width:100%;
+  height:11mm;
+  margin:0;
+  padding:0;
+
+  /* IMPORTANT:
+     Allow signature + HEADMASTER to extend upward
+     outside the footer container. */
+  overflow:visible;
+
+  background:#fff7ee;
+  z-index:5;
+}
+
+/* Orange bottom wave */
+.portrait-card-orange-curve {
+  position:absolute;
+  left:0;
+  bottom:0;
+  width:73.5%;
+  height:9.7mm;
+  background:#ec6414;
+  border-top-right-radius:100% 92%;
+  z-index:1;
+}
+
+.portrait-card-bottom::after {
+  content:"";
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  height:5.15mm;
+  background:#ec6414;
+  z-index:0;
+}
+
+/* Department text stays ON the orange footer */
+.portrait-card-department {
+  position:absolute;
+  left:2.15mm;
+  right:1.0mm;
+  bottom:1.42mm;
+  z-index:3;
+
+  color:#fff;
+  font-size:2.08mm;
+  font-weight:550;
+  line-height:1;
+  white-space:nowrap;
+  text-align:left;
+  letter-spacing:-.02em;
+}
 
 
-/* 54 x 86 mm portrait card. Preview and browser print use the same DOM. */
-.portrait-idcard{width:54mm;height:86mm;position:relative;overflow:hidden;border:1.2px solid #42230f;border-radius:1.1mm;background:#fff7ee;color:#312014;font-family:Arial,sans-serif;box-shadow:0 10px 24px rgba(91,47,15,.18);box-sizing:border-box}
-.portrait-card-header{height:16.5mm;position:relative;display:block;padding:0;background:#ec6414;color:#fff;box-sizing:border-box;overflow:hidden}
-.odisha-logo{position:absolute;left:2.2mm;top:2.5mm;width:8.5mm;height:9.5mm;object-fit:contain;display:block}
-.portrait-school-identity{position:absolute;left:11.5mm;right:1.8mm;top:1.5mm;height:13.5mm;min-width:0;text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:.55mm;overflow:hidden}
-.portrait-school-identity strong,.portrait-school-identity span{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:clip;margin:0;padding:0;color:#fff}
-.portrait-school-identity strong{font-size:1.8mm;line-height:1.2;letter-spacing:0;font-weight:950}
-.portrait-school-identity span{font-size:.90mm;line-height:1.2;font-weight:850}
-.portrait-school-identity .portrait-school-udise{font-size:1.5mm;line-height:1.2;font-weight:90}
-.portrait-card-title{text-align:center;height:7%;box-sizing:border-box;padding-top:1.6%;font-weight:900;color:#253b9b;font-size:2.35mm;letter-spacing:.04em}
-.portrait-card-photo-row{position:relative;height:30%;display:flex;justify-content:center;align-items:flex-start;box-sizing:border-box;padding-top:1%}
-.portrait-card-photo{width:20mm;height:25mm;overflow:hidden;border:1px solid #ec6414;border-radius:1.2px;background:#ec6414;display:grid;place-items:center;box-sizing:border-box}
-.portrait-card-photo-image{width:100%;height:100%;object-fit:cover;background:#fff7ee}
-.blood-drop-wrap{position:absolute;right:11%;top:10%;width:15%;height:76%;display:grid;place-items:center}
-.blood-drop-svg{position:absolute;width:100%;height:100%;display:block;fill:#c6292f}
-.blood-drop-wrap span{position:relative;z-index:1;color:#fff;font-size:1.95mm;font-weight:900;line-height:1}
-.portrait-card-details{height:35%;box-sizing:border-box;padding:2.2% 5% 0;text-align:center}
-.portrait-card-details h3{margin:3.2mm 0 3.8mm;color:#42230f;font-size:2.65mm;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:uppercase}
-.card-type-label{display:block;margin:1mm 0 2.5mm;font-size:1.35mm;color:#d4520f;letter-spacing:.04em;line-height:1.05}
-.portrait-card-details dl{margin:0;text-align:left;display:grid;gap:2.55mm;font-size:1.5mm;line-height:1.05}
-.portrait-card-details dl div{display:grid;grid-template-columns:39% 61%;min-width:0}
-.portrait-card-details dt{font-weight:800;color:#7b3e11}
-.portrait-card-details dd{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#252525}
-.portrait-card-bottom{height:13%;position:absolute;left:0;right:0;bottom:0;background:#fff7ee;overflow:hidden}
-.portrait-card-department{position:absolute;left:3%;bottom:24%;z-index:2;color:#fff;font-size:.98mm;font-weight:950;white-space:nowrap}
-.portrait-signature-area{position:absolute;right:2.5%;bottom:2.2%;width:31%;height:95%;z-index:4;text-align:center;color:#42230f}
-.portrait-signature{position:absolute;left:5%;bottom:31%;width:90%;height:57%;object-fit:contain;mix-blend-mode:multiply;background:transparent}
-.portrait-signature-area span{position:absolute;bottom:5%;left:0;right:0;font-size:1.0mm;font-weight:900;white-space:nowrap}
-.portrait-card-orange-curve{position:absolute;left:0;bottom:0;width:70%;height:86%;background:#ec6414;border-top-right-radius:100% 85%;z-index:1}
-.portrait-card-bottom::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2.6mm;background:#ec6414;z-index:0}
-.staff-thumb{display:block!important;width:56px!important;height:68px!important;max-width:56px!important;max-height:68px!important;object-fit:cover!important;border:1px solid #e2e8f0;border-radius:5px;background:#fff7ee}
-.idcard-photo-status{display:flex;align-items:center;gap:8px;white-space:nowrap}
-.photo-adjuster-frame{aspect-ratio:4/5!important}
-@media print{@page{size:A4 portrait;margin:0}html,body{margin:0!important;padding:0!important;background:#fff!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.sidebar,.main-content>*:not(.idcard-print-root),.app-footer{display:none!important}.main-content{padding:0!important;margin:0!important}.idcard-print-root{display:block!important}.idcard-print-page{width:210mm;height:297mm;display:grid!important;grid-template-columns:repeat(3,54mm)!important;grid-template-rows:repeat(3,86mm)!important;gap:4mm!important;padding:11.5mm 19mm!important;box-sizing:border-box;overflow:hidden;break-after:page}.idcard-print-page:last-child{break-after:auto}.idcard-print-page .portrait-idcard{width:54mm!important;height:86mm!important;min-width:54mm!important;max-width:54mm!important;min-height:86mm!important;max-height:86mm!important;aspect-ratio:auto!important;box-shadow:none!important;border-width:.35mm!important;border-radius:1.1mm!important}.idcard-print-page .portrait-card-header,.idcard-print-page .portrait-card-title,.idcard-print-page .portrait-card-photo-row,.idcard-print-page .portrait-card-details,.idcard-print-page .portrait-card-bottom{box-sizing:border-box!important}.idcard-print-page .portrait-school-identity strong{font-size:1.6mm!important}.idcard-print-page .portrait-school-identity span{font-size:.90mm!important}.idcard-print-page .portrait-school-identity .portrait-school-udise{font-size:1.2mm!important}.idcard-print-page .portrait-card-department{font-size:.98mm!important}.idcard-print-page .portrait-card-title{font-size:2.35mm!important}.idcard-print-page .portrait-card-details h3{font-size:2.65mm!important}.idcard-print-page .portrait-card-details dl{font-size:1.5mm!important}.idcard-print-page .blood-drop-wrap span{font-size:1.95mm!important}.idcard-print-page .portrait-signature-area span{font-size:1.2mm!important}}
+/* ==========================================================
+   SIGNATURE + HEADMASTER
+   MOVED ABOVE THE ORANGE FOOTER
+   ========================================================== */
+
+.portrait-signature-area {
+  position:absolute;
+
+  /* Right side */
+  right:2.0mm;
+
+  /* MOVE THE WHOLE BLOCK UP */
+  bottom:5.8mm;
+
+  width:14.0mm;
+  height:9.0mm;
+
+  z-index:20;
+  text-align:center;
+  color:#42230f;
+}
+
+/* Signature */
+.portrait-signature {
+  position:absolute;
+
+  left:0;
+
+  /* signature sits above HEADMASTER */
+  bottom:3.0mm;
+
+  width:14.0mm;
+  height:6.0mm;
+
+  object-fit:contain;
+  mix-blend-mode:multiply;
+  background:transparent;
+}
+
+/* HEADMASTER */
+.portrait-signature-area span {
+  position:absolute;
+
+  left:0;
+  right:0;
+
+  /* MOVE HEADMASTER UP */
+  bottom:.5mm;
+
+  font-size:1.95mm;
+  line-height:1;
+  font-weight:550;
+  white-space:nowrap;
+
+  /* Make sure it stays above orange */
+  z-index:21;
+}
+
+.staff-thumb {
+  display:block!important;
+  width:56px!important;
+  height:68px!important;
+  max-width:56px!important;
+  max-height:68px!important;
+  object-fit:cover!important;
+  border:1px solid #e2e8f0;
+  border-radius:5px;
+  background:#fff7ee;
+}
+
+.idcard-photo-status {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  white-space:nowrap;
+}
+
+.photo-adjuster-frame {
+  aspect-ratio:4/5!important;
+}
+
+/* Print: A4 sheet, 3 x 3 cards, each exactly 54 x 85 mm. */
+@media print {
+  @page {
+    size:A4 portrait;
+    margin:0;
+  }
+
+  html,
+  body {
+    margin:0!important;
+    padding:0!important;
+    background:#fff!important;
+    -webkit-print-color-adjust:exact!important;
+    print-color-adjust:exact!important;
+  }
+
+  .sidebar,
+  .main-content>*:not(.idcard-print-root),
+  .app-footer {
+    display:none!important;
+  }
+
+  .main-content {
+    padding:0!important;
+    margin:0!important;
+  }
+
+  .idcard-print-root {
+    display:block!important;
+  }
+
+  .idcard-print-page {
+    width:210mm;
+    height:297mm;
+    display:grid!important;
+    grid-template-columns:repeat(3,54mm)!important;
+    grid-template-rows:repeat(3,85mm)!important;
+    gap:4mm!important;
+    padding:14mm 19mm!important;
+    box-sizing:border-box;
+    overflow:hidden;
+    break-after:page;
+  }
+
+  .idcard-print-page:last-child {
+    break-after:auto;
+  }
+
+  .idcard-print-page .portrait-idcard {
+    width:54mm!important;
+    height:85mm!important;
+    min-width:54mm!important;
+    max-width:54mm!important;
+    min-height:85mm!important;
+    max-height:85mm!important;
+    aspect-ratio:auto!important;
+    box-shadow:none!important;
+    border-width:.35mm!important;
+    border-radius:1.1mm!important;
+  }
+
+  .idcard-print-page .portrait-card-header,
+  .idcard-print-page .portrait-card-title,
+  .idcard-print-page .portrait-card-photo-row,
+  .idcard-print-page .portrait-card-details,
+  .idcard-print-page .portrait-card-bottom {
+    box-sizing:border-box!important;
+  }
+}

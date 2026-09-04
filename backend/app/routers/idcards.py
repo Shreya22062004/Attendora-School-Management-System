@@ -1,4 +1,4 @@
-"""School-scoped 54 x 86 mm portrait ID cards for students and personnel."""
+"""School-scoped 54 x 85 mm portrait ID cards for students and personnel."""
 from io import BytesIO
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, defer
 
@@ -20,7 +21,7 @@ from ..media_storage import MediaStorageError, delete as delete_media, get_bytes
 
 router = APIRouter(prefix="/idcards", tags=["ID Cards"])
 CARD_WIDTH = 54 * mm
-CARD_HEIGHT = 86 * mm
+CARD_HEIGHT = 85 * mm
 CUT_GAP = 4 * mm
 COLS, ROWS = 3, 3
 PAGE_MARGIN_X = (A4[0] - COLS * CARD_WIDTH - (COLS - 1) * CUT_GAP) / 2
@@ -226,41 +227,78 @@ def _drop(pdf, x, y, value):
 
 def _line(pdf, x, y, label, value, width=18 * mm):
     pdf.setFillColor(colors.HexColor("#7b3e11"))
-    pdf.setFont("Helvetica-Bold", 3.45)
+    pdf.setFont("Helvetica-Bold", 5.55)
     pdf.drawString(x, y, label)
     pdf.setFillColor(colors.HexColor("#252525"))
-    pdf.setFont("Helvetica", 3.5)
+    pdf.setFont("Helvetica-Bold", 5.65)
     text = str(value or "")
-    while text and pdf.stringWidth(text, "Helvetica", 3.5) > width:
+    while text and pdf.stringWidth(text, "Helvetica-Bold", 5.65) > width:
         text = text[:-1]
     pdf.drawString(x + 11 * mm, y, text)
 
 
+def _wrap_words(text, font_name, font_size, max_width):
+    """Wrap text by words so long school/address strings stay inside the header."""
+    words = str(text or "").split()
+    if not words:
+        return []
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if not current or pdf_string_width(candidate, font_name, font_size) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def pdf_string_width(text, font_name, font_size):
+    return stringWidth(text, font_name, font_size)
+
+
+def _draw_centered_lines(pdf, lines, center_x, first_y, font_name, font_size, leading):
+    pdf.setFont(font_name, font_size)
+    for index, line in enumerate(lines):
+        pdf.drawCentredString(center_x, first_y - index * leading, line)
+
+
 def _draw_card(pdf, person, school, x, y):
-    """Draw the same 54 x 86 mm portrait composition used by the React preview."""
+    """Draw the 54 x 85 mm portrait card to match the React preview."""
     orange = colors.HexColor("#ec6414")
     dark = colors.HexColor("#42230f")
     cream = colors.HexColor("#fff7ee")
 
+    # Base card.
     pdf.setFillColor(cream)
     pdf.setStrokeColor(dark)
     pdf.setLineWidth(.35 * mm)
     pdf.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 1.1 * mm, fill=1, stroke=1)
 
-    # Header: logo + school name on the same horizontal line, with
-    # address and UDISE safely centered underneath.  Use fixed safe
-    # baselines rather than vertical percentages so the lines cannot
-    # disappear above the orange header in either preview or PDF.
-    header_h = 16.5 * mm
+    # ============================================================
+    # HEADER — 18 mm high, matching the reference composition.
+    # ============================================================
+    header_h = 18 * mm
     header_y = y + CARD_HEIGHT - header_h
     pdf.setFillColor(orange)
-    pdf.roundRect(x + .35 * mm, header_y, CARD_WIDTH - .7 * mm, header_h, .8 * mm, fill=1, stroke=0)
+    pdf.rect(x + .35 * mm, header_y, CARD_WIDTH - .7 * mm, header_h, fill=1, stroke=0)
 
     if LOGO_PATH.is_file():
-        _draw_image(pdf, LOGO_PATH, x + 2.2 * mm, header_y + 3.0 * mm, 8.5 * mm, 9.5 * mm, "", False)
+        _draw_image(
+            pdf,
+            LOGO_PATH,
+            x + 2.25 * mm,
+            header_y + 2.45 * mm,
+            11.8 * mm,
+            12.7 * mm,
+            "",
+            False,
+        )
 
-    text_x = x + 11.5 * mm
-    text_w = CARD_WIDTH - 13.3 * mm
+    text_x = x + 14.7 * mm
+    text_w = CARD_WIDTH - 16.0 * mm
     text_center_x = text_x + text_w / 2
     school_name = (school.school_name or "").upper()
     address = (school.address or "").upper()
@@ -268,57 +306,94 @@ def _draw_card(pdf, person, school, x, y):
 
     pdf.setFillColor(colors.white)
 
-    # School name: deliberately smaller so KANTABANJI and other long
-    # school names remain completely visible.
-    name_size = 4.45
-    while name_size > 3.35 and pdf.stringWidth(school_name, "Helvetica-Bold", name_size) > text_w:
-        name_size -= .08
-    pdf.setFont("Helvetica-Bold", name_size)
-    if school_name:
-        pdf.drawCentredString(text_center_x, header_y + 11.1 * mm, school_name)
+    # School name: two centered lines, large and bold.
+    name_size = 7.45
+    name_lines = _wrap_words(school_name, "Helvetica-Bold", name_size, text_w)
+    while len(name_lines) > 2 and name_size > 6.0:
+        name_size -= .15
+        name_lines = _wrap_words(school_name, "Helvetica-Bold", name_size, text_w)
+    name_lines = name_lines[:2]
+    if name_lines:
+        _draw_centered_lines(
+            pdf,
+            name_lines,
+            text_center_x,
+            header_y + 13.7 * mm,
+            "Helvetica-Bold",
+            name_size,
+            3.25 * mm,
+        )
 
-    # Address and UDISE each have their own safe baseline inside the header.
-    address_size = 2.45
-    while address_size > 1.65 and pdf.stringWidth(address, "Helvetica-Bold", address_size) > text_w:
-        address_size -= .06
-    pdf.setFont("Helvetica-Bold", address_size)
-    if address:
-        pdf.drawCentredString(text_center_x, header_y + 7.35 * mm, address)
+    # Address: two centered lines, large and bold.
+    address_size = 4.25
+    address_lines = _wrap_words(address, "Helvetica-Bold", address_size, text_w)
+    while len(address_lines) > 2 and address_size > 3.2:
+        address_size -= .12
+        address_lines = _wrap_words(address, "Helvetica-Bold", address_size, text_w)
+    address_lines = address_lines[:2]
+    if address_lines:
+        _draw_centered_lines(
+            pdf,
+            address_lines,
+            text_center_x,
+            header_y + 6.9 * mm,
+            "Helvetica-Bold",
+            address_size,
+            3.0 * mm,
+        )
 
-    udise_text = f"UDISE CODE: {udise_code}" if udise_code else ""
-    udise_size = 3.05
-    while udise_size > 2.0 and pdf.stringWidth(udise_text, "Helvetica-Bold", udise_size) > text_w:
-        udise_size -= .06
-    pdf.setFont("Helvetica-Bold", udise_size)
+    # UDISE is pushed down and enlarged.
+    udise_text = f"UDISE CODE : {udise_code}" if udise_code else ""
+    udise_size = 5.05
+    while udise_text and udise_size > 4.0 and pdf.stringWidth(udise_text, "Helvetica-Bold", udise_size) > text_w:
+        udise_size -= .1
     if udise_text:
-        pdf.drawCentredString(text_center_x, header_y + 4.0 * mm, udise_text)
+        pdf.setFont("Helvetica-Bold", udise_size)
+        pdf.drawCentredString(text_center_x, header_y + 1.9 * mm, udise_text)
 
-    # Central heading.
+    # ============================================================
+    # IDENTITY CARD heading.
+    # ============================================================
     pdf.setFillColor(colors.HexColor("#253b9b"))
-    pdf.setFont("Helvetica-Bold", 6.3)
-    pdf.drawCentredString(x + CARD_WIDTH / 2, y + CARD_HEIGHT - 20.5 * mm, "IDENTITY CARD")
+    pdf.setFont("Helvetica-Bold", 9.1)
+    pdf.drawCentredString(x + CARD_WIDTH / 2, y + CARD_HEIGHT - 21.2 * mm, "IDENTITY CARD")
 
-    # Photo centered, blood droplet to its right.
-    # Stamp-size photograph: 20 x 25 mm.
-    photo_w, photo_h = 20 * mm, 25 * mm
+    # ============================================================
+    # PHOTO + BLOOD GROUP.
+    # ============================================================
+    photo_w, photo_h = 22.2 * mm, 27.2 * mm
     photo_x = x + (CARD_WIDTH - photo_w) / 2
-    photo_y = y + CARD_HEIGHT - 45.8 * mm
+    photo_y = y + CARD_HEIGHT - 50.5 * mm
+
     pdf.setFillColor(orange)
     pdf.setStrokeColor(orange)
-    pdf.setLineWidth(.3 * mm)
-    pdf.roundRect(photo_x - .45 * mm, photo_y - .45 * mm, photo_w + .9 * mm, photo_h + .9 * mm, .55 * mm, fill=1, stroke=1)
+    pdf.setLineWidth(.28 * mm)
+    pdf.roundRect(
+        photo_x - .3 * mm,
+        photo_y - .3 * mm,
+        photo_w + .6 * mm,
+        photo_h + .6 * mm,
+        .35 * mm,
+        fill=1,
+        stroke=1,
+    )
+
     photo = _student_photo(person) if isinstance(person, models.Student) else _staff_photo(person)
     _draw_image(pdf, photo[0] if photo else None, photo_x, photo_y, photo_w, photo_h)
-    _drop(pdf, x + 43.2 * mm, photo_y + 15.2 * mm, getattr(person, "blood_group", None))
 
-    # Name below the photograph.
+    _drop(pdf, x + 46.9 * mm, photo_y + 8.9 * mm, getattr(person, "blood_group", None))
+
+    # ============================================================
+    # NAME + DETAILS.
+    # ============================================================
     name = str(person.name or "").upper()
-    name_size = 5.0
-    while name_size > 3.6 and pdf.stringWidth(name, "Helvetica-Bold", name_size) > CARD_WIDTH - 7 * mm:
+    name_size = 9.0
+    while name_size > 7.0 and pdf.stringWidth(name, "Helvetica-Bold", name_size) > CARD_WIDTH - 6 * mm:
         name_size -= .15
     pdf.setFillColor(dark)
     pdf.setFont("Helvetica-Bold", name_size)
-    pdf.drawCentredString(x + CARD_WIDTH / 2, photo_y - 3.5 * mm, name)
+    pdf.drawCentredString(x + CARD_WIDTH / 2, photo_y - 4.0 * mm, name)
+
     if isinstance(person, models.Student):
         rows = [
             ("FATHER'S NAME", person.father_name),
@@ -336,51 +411,64 @@ def _draw_card(pdf, person, school, x, y):
             ("DATE OF BIRTH", person.date_of_birth.strftime("%d/%m/%Y") if person.date_of_birth else None),
         ]
 
-    row_y = photo_y - 9.7 * mm
-    label_x = x + 4.2 * mm
-    value_x = x + 20.5 * mm
-    value_w = CARD_WIDTH - 24.5 * mm
+    # Larger detail rows with the same left/value alignment as the reference.
+    row_y = photo_y - 9.4 * mm
+    label_x = x + 4.0 * mm
+    value_w = CARD_WIDTH - 27.0 * mm
     for label, value in rows:
         _line(pdf, label_x, row_y, f"{label}:", value, value_w)
-        row_y -= 4.2 * mm
+        row_y -= 3.7 * mm
 
-    # Sample-style bottom: cream body remains visible; orange is a curved left fill.
-    bottom_h = 13.0 * mm
+    # ============================================================
+    # BOTTOM ORANGE WAVE + DEPARTMENT + SIGNATURE.
+    # ============================================================
     bottom_y = y
-    pdf.setFillColor(colors.HexColor("#f2ddc2"))
-    pdf.rect(x + .7 * mm, bottom_y + bottom_h - .35 * mm, CARD_WIDTH - 1.4 * mm, .35 * mm, fill=1, stroke=0)
 
-    # Curved orange panel on the lower-left, matching the reference card.
     path = pdf.beginPath()
     left = x + .35 * mm
-    right = x + 36.0 * mm
+    right = x + 39.5 * mm
     base = bottom_y + .35 * mm
-    top = bottom_y + 9.8 * mm
+    top = bottom_y + 9.7 * mm
     path.moveTo(left, base)
     path.lineTo(right, base)
-    path.curveTo(right - 1.5 * mm, base + 4.8 * mm, right - 7.5 * mm, top, right - 15.5 * mm, top)
+    path.curveTo(
+        right - 2.0 * mm,
+        base + 4.4 * mm,
+        right - 8.5 * mm,
+        top,
+        right - 17.0 * mm,
+        top,
+    )
     path.lineTo(left, top)
     path.close()
     pdf.setFillColor(orange)
     pdf.drawPath(path, fill=1, stroke=0)
 
-    pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 2.35)
-    pdf.drawString(x + 2.2 * mm, bottom_y + 4.25 * mm, "SCHOOL AND MASS EDUCATION DEPARTMENT")
+    # Full-width lower orange strip.
+    pdf.setFillColor(orange)
+    pdf.rect(x + .35 * mm, bottom_y + .35 * mm, CARD_WIDTH - .7 * mm, 5.15 * mm, fill=1, stroke=0)
 
-    # Signature sits clearly ABOVE the HEADMASTER label and both remain on
-    # the cream area, away from the orange bottom strip/curve.
+    # Reference uses an ampersand and the text fills the orange strip.
+    department = "SCHOOL & MASS EDUCATION DEPARTMENT"
+    department_size = 6.15
+    department_max_width = CARD_WIDTH - 4.5 * mm
+    while department_size > 4.8 and pdf.stringWidth(department, "Helvetica-Bold", department_size) > department_max_width:
+        department_size -= .1
+    pdf.setFillColor(colors.white)
+    pdf.setFont("Helvetica-Bold", department_size)
+    pdf.drawCentredString(x + 26.5 * mm, bottom_y + 1.65 * mm, department)
+
+    # Signature above HEADMASTER, both on the cream area.
     signature = _school_signature(school)
     sig_x = x + 38.0 * mm
-    sig_w, sig_h = 14.0 * mm, 5.7 * mm
+    sig_w, sig_h = 14.0 * mm, 4.0 * mm
     if signature:
-        _draw_image(pdf, signature[0], sig_x, bottom_y + 6.1 * mm, sig_w, sig_h, "", True)
-    pdf.setStrokeColor(dark)
-    pdf.setLineWidth(.18 * mm)
-    pdf.line(sig_x, bottom_y + 5.65 * mm, sig_x + sig_w, bottom_y + 5.65 * mm)
+        _draw_image(pdf, signature[0], sig_x, bottom_y + 5.95 * mm, sig_w, sig_h, "", True)
+
     pdf.setFillColor(dark)
-    pdf.setFont("Helvetica-Bold", 2.55)
-    pdf.drawCentredString(sig_x + sig_w / 2, bottom_y + 3.25 * mm, "HEADMASTER")
+    pdf.setFont("Helvetica-Bold", 6.0)
+    pdf.drawCentredString(sig_x + sig_w / 2, bottom_y + 4.45 * mm, "HEADMASTER")
+
 
 def _pdf_response(people, school, filename):
     stream = BytesIO(); pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)

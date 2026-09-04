@@ -74,7 +74,7 @@ export function PersonIDCard({ person, settings, photoSrc, signatureSrc, protect
       <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}:</dt><dd>{value || ""}</dd></div>)}</dl>
     </div>
     <div className="portrait-card-bottom">
-      <div className="portrait-card-department">SCHOOL AND MASS EDUCATION DEPARTMENT</div>
+      <div className="portrait-card-department">SCHOOL & MASS EDUCATION DEPARTMENT</div>
       <div className="portrait-signature-area">
         {(protectedImages ? settings.has_headmaster_signature : signatureSrc) && (protectedImages
           ? <ProtectedImage key={`sign-${refreshKey}`} src={settings.headmaster_signature_url} path="/idcards/settings/signature" className="portrait-signature" alt="Headmaster signature"/>
