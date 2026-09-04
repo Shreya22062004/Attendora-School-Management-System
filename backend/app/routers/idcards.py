@@ -1,6 +1,7 @@
 """School-scoped 54 x 85 mm portrait ID cards for students and personnel."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -90,21 +91,48 @@ def _legacy_image(path):
     return (data, mime) if mime else None
 
 
+@lru_cache(maxsize=512)
+def _cached_remote_photo(public_id: str, secure_url: str):
+    """Fetch a small Cloudinary derivative once per warm server instance."""
+    try:
+        data, mime = get_media(
+            public_id,
+            secure_url,
+            transformation=[
+                {"width": 360, "height": 460, "crop": "fill", "quality": "auto"},
+            ],
+        )
+        if mime != "image/jpeg":
+            image = ImageOps.exif_transpose(Image.open(BytesIO(data))).convert("RGB")
+            image.thumbnail((360, 460), Image.Resampling.LANCZOS)
+            out = BytesIO()
+            image.save(out, format="JPEG", quality=82, optimize=True)
+            data, mime = out.getvalue(), "image/jpeg"
+        return data, mime
+    except MediaStorageError:
+        return None
+
+
 def _student_photo(student):
-    # Local DB bytes are the fast/reliable primary copy. Cloudinary remains a
-    # fallback for older records that were uploaded before this optimization.
+    # Local DB bytes are the fastest/reliable primary copy. Cloudinary is only
+    # a fallback for older records that do not have the local binary copy.
     if student.photo_data:
         return student.photo_data, student.photo_mime_type or "image/jpeg"
     if student.photo_storage_key or student.photo_storage_url:
-        try: return get_media(student.photo_storage_key, student.photo_storage_url)
-        except MediaStorageError: pass
+        return _cached_remote_photo(
+            student.photo_storage_key or "",
+            student.photo_storage_url or "",
+        )
     return _legacy_image(student.photo)
 
 
 def _staff_photo(staff):
-    if not staff.photo_storage_key: return None
-    try: return get_media(staff.photo_storage_key, staff.photo_storage_url)
-    except MediaStorageError: return None
+    if not staff.photo_storage_key:
+        return None
+    return _cached_remote_photo(
+        staff.photo_storage_key,
+        staff.photo_storage_url or "",
+    )
 
 
 def _school_signature(school):
@@ -287,21 +315,59 @@ def get_student_photo(student_id: int, user=Depends(require_school_user), db: Se
 
 def _draw_image(pdf, source, x, y, width, height, placeholder="", signature=False):
     if not source:
-        pdf.setFillColor(colors.HexColor("#fff7ee")); pdf.rect(x, y, width, height, fill=1, stroke=0); return
+        pdf.setFillColor(colors.HexColor("#fff7ee"))
+        pdf.rect(x, y, width, height, fill=1, stroke=0)
+        return
     try:
-        image = ImageOps.exif_transpose(Image.open(BytesIO(source) if isinstance(source, bytes) else source)).convert("RGBA")
         if signature:
-            # Also clean older signatures that were uploaded before the
-            # transparent-background fix.
-            png_bytes, _ = _remove_white_background_bytes(
-                source if isinstance(source, bytes) else Path(source).read_bytes()
-            )
+            raw = source if isinstance(source, bytes) else Path(source).read_bytes()
+            png_bytes, _ = _remove_white_background_bytes(raw)
             image = Image.open(BytesIO(png_bytes)).convert("RGBA")
             bbox = image.getbbox()
             if bbox:
                 image = image.crop(bbox)
-        iw, ih = image.size; scale = min(width / iw, height / ih); dw, dh = iw * scale, ih * scale
-        pdf.drawImage(ImageReader(image), x + (width - dw) / 2, y + (height - dh) / 2, dw, dh, mask="auto")
+            iw, ih = image.size
+            scale = min(width / iw, height / ih)
+            dw, dh = iw * scale, ih * scale
+            pdf.drawImage(
+                ImageReader(image),
+                x + (width - dw) / 2,
+                y + (height - dh) / 2,
+                dw, dh,
+                mask="auto",
+            )
+            return
+
+        # JPEG photo bytes can be embedded directly. Avoid converting every
+        # 800px photo to RGBA before ReportLab draws a 22mm x 27mm image.
+        if isinstance(source, bytes) and source.startswith(b"\xff\xd8\xff"):
+            reader = ImageReader(BytesIO(source))
+            iw, ih = reader.getSize()
+            scale = min(width / iw, height / ih)
+            dw, dh = iw * scale, ih * scale
+            pdf.drawImage(
+                reader,
+                x + (width - dw) / 2,
+                y + (height - dh) / 2,
+                dw, dh,
+                preserveAspectRatio=True,
+                anchor="c",
+            )
+            return
+
+        image = ImageOps.exif_transpose(
+            Image.open(BytesIO(source) if isinstance(source, bytes) else source)
+        ).convert("RGBA")
+        iw, ih = image.size
+        scale = min(width / iw, height / ih)
+        dw, dh = iw * scale, ih * scale
+        pdf.drawImage(
+            ImageReader(image),
+            x + (width - dw) / 2,
+            y + (height - dh) / 2,
+            dw, dh,
+            mask="auto",
+        )
     except Exception:
         _draw_image(pdf, None, x, y, width, height, placeholder, signature)
 
@@ -569,16 +635,33 @@ def _person_photo(person):
 
 
 def _pdf_response(people, school, filename):
-    # Fetch remote Cloudinary media concurrently once per PDF request. The old
-    # browser-print flow fetched every protected image in React and then waited
-    # for the print renderer; this keeps the PDF generation server-side and
-    # avoids repeated signature downloads.
+    """Generate selected cards efficiently for large bulk runs."""
     people = list(people)
     signature = _school_signature(school)
     photos = {}
-    if people:
-        with ThreadPoolExecutor(max_workers=min(16, len(people))) as executor:
-            futures = {executor.submit(_person_photo, person): index for index, person in enumerate(people)}
+    remote_indexes = []
+
+    # Never refetch a student photo from Cloudinary when the local DB copy is
+    # available. Only legacy Cloudinary-only records need remote I/O.
+    for index, person in enumerate(people):
+        if isinstance(person, models.Student) and person.photo_data:
+            photos[index] = (
+                person.photo_data,
+                person.photo_mime_type or "image/jpeg",
+            )
+        elif isinstance(person, models.Student) and (
+            person.photo_storage_key or person.photo_storage_url
+        ):
+            remote_indexes.append(index)
+        elif isinstance(person, models.Staff) and person.photo_storage_key:
+            remote_indexes.append(index)
+
+    if remote_indexes:
+        with ThreadPoolExecutor(max_workers=min(24, len(remote_indexes))) as executor:
+            futures = {
+                executor.submit(_person_photo, people[index]): index
+                for index in remote_indexes
+            }
             for future in as_completed(futures):
                 photos[futures[future]] = future.result()
 

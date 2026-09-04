@@ -39,13 +39,29 @@ def put_bytes(public_id: str, data: bytes, mime_type: str) -> tuple[str, str]:
         raise MediaStorageError("Could not save media to Cloudinary") from error
 
 
-def get_bytes(public_id: str, secure_url: str | None = None) -> tuple[bytes, str]:
+def get_bytes(
+    public_id: str,
+    secure_url: str | None = None,
+    transformation: list | None = None,
+) -> tuple[bytes, str]:
     try:
         _configure()
-        url = secure_url
+        if public_id and transformation:
+            url, _ = cloudinary.utils.cloudinary_url(
+                public_id,
+                resource_type="image",
+                secure=True,
+                transformation=transformation,
+            )
+        else:
+            url = secure_url
         if not url:
-            url, _ = cloudinary.utils.cloudinary_url(public_id, resource_type="image", secure=True)
-        with urlopen(url, timeout=5) as response:
+            url, _ = cloudinary.utils.cloudinary_url(
+                public_id,
+                resource_type="image",
+                secure=True,
+            )
+        with urlopen(url, timeout=4) as response:
             return response.read(), response.headers.get_content_type() or "image/jpeg"
     except Exception as error:
         raise MediaStorageError("Could not retrieve media from Cloudinary") from error
