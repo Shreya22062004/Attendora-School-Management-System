@@ -7,6 +7,36 @@ import React, {
 import api from "../services/api";
 
 
+function StudentPhotoThumb({ student }) {
+  const [src, setSrc] = useState("");
+
+  useEffect(() => {
+    let objectUrl = "";
+    if (student.photo_url) {
+      setSrc(student.photo_url);
+      return undefined;
+    }
+    if (!student.photo_uploaded) {
+      setSrc("");
+      return undefined;
+    }
+
+    api.get(`/idcards/students/${student.id}/photo`, { responseType: "blob" })
+      .then((response) => {
+        objectUrl = URL.createObjectURL(response.data);
+        setSrc(objectUrl);
+      })
+      .catch(() => setSrc(""));
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [student.id, student.photo_url, student.photo_uploaded]);
+
+  return src ? <img className="staff-thumb" src={src} alt={`${student.name} photo`} /> : "-";
+}
+
+
 const DEFAULT_CLASSES = ["UKG/KG2/PP1","1","2","3","4","5","6","7","8"];
 
 
@@ -65,9 +95,25 @@ export default function Students() {
 
     try {
 
-      const response = await api.get("/students");
-
-      setStudents(response.data);
+      const [response, photoResponse] = await Promise.all([
+        api.get("/students"),
+        api.get("/idcards/students")
+      ]);
+      const photoById = Object.fromEntries(
+        (photoResponse.data.students || []).map((student) => [
+          student.id,
+          {
+            photo_url: student.photo_url || "",
+            photo_uploaded: Boolean(student.photo_uploaded)
+          }
+        ])
+      );
+      setStudents(
+        response.data.map((student) => ({
+          ...student,
+          ...(photoById[student.id] || {})
+        }))
+      );
 
     } catch (error) {
 
@@ -894,6 +940,7 @@ export default function Students() {
             <thead>
 
               <tr>
+                <th>Photo</th>
                 <th>Name</th>
                 <th>Class</th>
                 <th>Gender</th>
@@ -926,6 +973,10 @@ export default function Students() {
               {shown.map((student) => (
 
                 <tr key={student.id}>
+
+                  <td>
+                    <StudentPhotoThumb student={student} />
+                  </td>
 
                   <td>
 
