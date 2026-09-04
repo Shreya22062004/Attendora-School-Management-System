@@ -548,10 +548,13 @@ def _draw_card(pdf, person, school, x, y, photo_data=None, signature_data=None):
 
     # Signature above HEADMASTER, both on the cream area.
     signature = signature_data if signature_data is not None else _school_signature(school)
-    sig_x = x + 38.0 * mm
-    sig_w, sig_h = 14.0 * mm, 4.0 * mm
+    # Larger signature area: the transparent signature/seal is intentionally
+    # given more room while staying above the HEADMASTER label and inside the
+    # cream portion of the card.
+    sig_x = x + 35.8 * mm
+    sig_w, sig_h = 17.0 * mm, 5.8 * mm
     if signature:
-        _draw_image(pdf, signature[0], sig_x, bottom_y + 5.95 * mm, sig_w, sig_h, "", True)
+        _draw_image(pdf, signature[0], sig_x, bottom_y + 5.65 * mm, sig_w, sig_h, "", True)
 
     pdf.setFillColor(dark)
     pdf.setFont("Helvetica-Bold", 6.0)

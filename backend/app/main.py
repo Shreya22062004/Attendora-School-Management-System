@@ -8,12 +8,12 @@ Base.metadata.create_all(bind=engine)
 # Lightweight additive migration for existing PostgreSQL databases.
 # Production deployments should replace this with Alembic migrations.
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 def additive_migrate():
  # SQLite development/test databases are created from the current SQLAlchemy
  # metadata above. PostgreSQL alone needs these production ALTER statements.
  if engine.dialect.name == 'sqlite': return
- with engine.begin() as c:
-  statements=[
+ statements=[
    'ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS section VARCHAR',
    'ALTER TABLE students ADD COLUMN IF NOT EXISTS stream VARCHAR',
@@ -47,8 +47,20 @@ def additive_migrate():
    'ALTER TABLE attendance_history ADD COLUMN IF NOT EXISTS edited_by INTEGER REFERENCES users(id)',
    'ALTER TABLE school_calendar ADD COLUMN IF NOT EXISTS academic_year_id INTEGER REFERENCES academic_years(id)',
    "ALTER TABLE school_configs ADD COLUMN IF NOT EXISTS dashboard_groups_json TEXT DEFAULT '[]'"
-  ]
-  for q in statements: c.execute(text(q))
+ ]
+ # Run each ALTER in its own short transaction. A busy PostgreSQL table can
+ # otherwise abort the entire application import when an ALTER waits for a
+ # lock and the database statement_timeout is reached. Missing migrations
+ # are safe to retry on the next backend start.
+ for q in statements:
+  try:
+   with engine.begin() as c:
+    if engine.dialect.name == 'postgresql':
+     c.execute(text("SET LOCAL lock_timeout = '1500ms'"))
+     c.execute(text("SET LOCAL statement_timeout = '5000ms'"))
+     c.execute(text(q))
+  except SQLAlchemyError as error:
+   print(f"[migration] skipped statement after database timeout/error: {q}\n  {error}")
 additive_migrate()
 def seed():
  db=SessionLocal()

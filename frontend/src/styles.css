@@ -480,8 +480,8 @@
   /* MOVE THE WHOLE BLOCK UP */
   bottom:5.8mm;
 
-  width:14.0mm;
-  height:9.0mm;
+  width:21.5mm;
+  height:11mm;
 
   z-index:20;
   text-align:center;
@@ -497,8 +497,8 @@
   /* signature sits above HEADMASTER */
   bottom:3.0mm;
 
-  width:14.0mm;
-  height:6.0mm;
+  width:28.5mm;
+  height:10.5mm;
 
   object-fit:contain;
   mix-blend-mode:multiply;
@@ -510,12 +510,12 @@
   position:absolute;
 
   left:0;
-  right:0;
+  right:-24px;
 
   /* MOVE HEADMASTER UP */
   bottom:.5mm;
 
-  font-size:1.95mm;
+  font-size:2.00mm;
   line-height:1;
   font-weight:550;
   white-space:nowrap;
