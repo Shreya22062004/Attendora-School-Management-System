@@ -111,7 +111,7 @@ export default function IDCards() {
       };
       const response = await api.post("/idcards/print.pdf", payload, {
         responseType: "blob",
-        timeout: 180000,
+        timeout: 300000,
       });
       if (!response.data || response.data.size === 0) {
         throw new Error("The generated PDF is empty");

@@ -634,22 +634,49 @@ def _person_photo(person):
         return None
 
 
-def _pdf_response(people, school, filename):
+def _pdf_response(people, school, filename, db=None):
     """Generate selected cards efficiently for large bulk runs."""
     people = list(people)
     signature = _school_signature(school)
     photos = {}
     remote_indexes = []
+    backfilled_students = []
 
-    # Never refetch a student photo from Cloudinary when the local DB copy is
-    # available. Only legacy Cloudinary-only records need remote I/O.
-    for index, person in enumerate(people):
-        if isinstance(person, models.Student) and person.photo_data:
-            photos[index] = (
-                person.photo_data,
-                person.photo_mime_type or "image/jpeg",
+    # The main Student query intentionally defers photo_data so listing/lookup
+    # queries do not pull hundreds of BYTEA images into memory. Fetch all local
+    # student images needed for this PDF in ONE query instead of triggering an
+    # N+1 deferred-column query while drawing cards.
+    if db:
+        student_ids = [
+            person.id for person in people if isinstance(person, models.Student)
+        ]
+        if student_ids:
+            local_rows = (
+                db.query(
+                    models.Student.id,
+                    models.Student.photo_data,
+                    models.Student.photo_mime_type,
+                )
+                .filter(
+                    models.Student.school_id == school.id,
+                    models.Student.id.in_(student_ids),
+                    models.Student.photo_data.isnot(None),
+                )
+                .all()
             )
-        elif isinstance(person, models.Student) and (
+            local_by_id = {
+                row.id: (row.photo_data, row.photo_mime_type or "image/jpeg")
+                for row in local_rows
+            }
+            for index, person in enumerate(people):
+                if isinstance(person, models.Student) and person.id in local_by_id:
+                    photos[index] = local_by_id[person.id]
+
+    # Only legacy Cloudinary-only records need remote I/O.
+    for index, person in enumerate(people):
+        if index in photos:
+            continue
+        if isinstance(person, models.Student) and (
             person.photo_storage_key or person.photo_storage_url
         ):
             remote_indexes.append(index)
@@ -657,13 +684,35 @@ def _pdf_response(people, school, filename):
             remote_indexes.append(index)
 
     if remote_indexes:
-        with ThreadPoolExecutor(max_workers=min(24, len(remote_indexes))) as executor:
+        # Keep outbound concurrency bounded. Too many simultaneous Cloudinary
+        # requests can saturate a small Hugging Face Space and make a bulk PDF
+        # request slower rather than faster.
+        max_workers = min(16, len(remote_indexes))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_person_photo, people[index]): index
                 for index in remote_indexes
             }
             for future in as_completed(futures):
-                photos[futures[future]] = future.result()
+                index = futures[future]
+                result = future.result()
+                if result:
+                    photos[index] = result
+
+                    # Backfill legacy student photos into PostgreSQL after a
+                    # successful remote fetch. Future PDF requests then avoid
+                    # Cloudinary completely for that student.
+                    person = people[index]
+                    if db and isinstance(person, models.Student):
+                        person.photo_data = result[0]
+                        person.photo_mime_type = result[1] or "image/jpeg"
+                        backfilled_students.append(person)
+
+        if db and backfilled_students:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
 
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
@@ -770,7 +819,9 @@ def print_selected_cards(payload: dict, user=Depends(require_school_user), db: S
 
     students = {
         item.id: item
-        for item in db.query(models.Student).filter(
+        for item in db.query(models.Student).options(
+            defer(models.Student.photo_data)
+        ).filter(
             models.Student.school_id == user.school_id,
             models.Student.is_active == True,
             models.Student.id.in_(student_ids),
@@ -804,14 +855,14 @@ def print_selected_cards(payload: dict, user=Depends(require_school_user), db: S
             people.append(staff[value])
             seen.add(key)
 
-    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "id-cards.pdf")
+    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "id-cards.pdf", db=db)
 
 
 @router.get("/staff/bulk.pdf")
 def bulk_staff_cards(staff_type: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
     query = db.query(models.Staff).filter(models.Staff.school_id == user.school_id, models.Staff.is_active == True)
     if staff_type: query = query.filter(models.Staff.staff_type == staff_type.upper())
-    return _pdf_response(query.order_by(models.Staff.name).all(), _school(db, user.school_id, include_signature=True), "staff-id-cards.pdf")
+    return _pdf_response(query.order_by(models.Staff.name).all(), _school(db, user.school_id, include_signature=True), "staff-id-cards.pdf", db=db)
 
 
 @router.get("/staff/bulk.docx")
@@ -823,13 +874,13 @@ def bulk_staff_docx(staff_type: str | None = None, user=Depends(require_school_u
 
 @router.get("/staff/{staff_id}.pdf")
 def staff_card(staff_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    return _pdf_response([_staff(db, staff_id, user.school_id)], _school(db, user.school_id, include_signature=True), f"staff-id-card-{staff_id}.pdf")
+    return _pdf_response([_staff(db, staff_id, user.school_id)], _school(db, user.school_id, include_signature=True), f"staff-id-card-{staff_id}.pdf", db=db)
 
 
 @router.get("/bulk.pdf")
 def bulk_student_cards(class_name: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
     people = _student_query(db, user.school_id, class_name).all()
-    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "student-id-cards.pdf")
+    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "student-id-cards.pdf", db=db)
 
 
 @router.get("/bulk.docx")
@@ -839,4 +890,4 @@ def bulk_student_docx(class_name: str | None = None, user=Depends(require_school
 
 @router.get("/{student_id}.pdf")
 def student_card(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    return _pdf_response([_student(db, student_id, user.school_id, include_photo=True)], _school(db, user.school_id, include_signature=True), f"student-id-card-{student_id}.pdf")
+    return _pdf_response([_student(db, student_id, user.school_id, include_photo=True)], _school(db, user.school_id, include_signature=True), f"student-id-card-{student_id}.pdf", db=db)
