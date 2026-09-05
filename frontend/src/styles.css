@@ -212,12 +212,14 @@
   width: 100%;
 
   font-size: 2.8mm;
-  line-height: 1.05;
+  line-height: 1;
   letter-spacing: 0;
   font-weight: 950;
   white-space: normal;
 
-  max-height: 5.4mm;
+  /* Two-line school names need the full line box; otherwise
+     the bottom of the second line is clipped in the saved PDF. */
+  max-height: 6.2mm;
 }
 
 .portrait-school-identity span {
