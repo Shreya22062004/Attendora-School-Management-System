@@ -1,5 +1,6 @@
 """School-scoped personnel records and Cloudinary-backed staff photos."""
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from uuid import uuid4
 from fastapi.responses import Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -128,16 +129,21 @@ async def upload_photo(staff_id: int, file: UploadFile = File(...), user=Depends
         raise HTTPException(400, "Upload an image no larger than 5 MB")
     try:
         data, mime_type = optimize_student_photo(raw)
-        public_id, secure_url = put_bytes(f"attendora/staff/{item.id}", data, mime_type)
+        # Every upload gets a new Cloudinary asset so changing a staff photo
+        # never destroys the previous photo.
+        public_id, secure_url = put_bytes(
+            f"attendora/staff/{item.id}/{uuid4().hex}", data, mime_type
+        )
     except MediaStorageError as error:
         raise HTTPException(503, str(error)) from error
     previous_key = item.photo_storage_key; item.photo_storage_key = public_id; item.photo_storage_url = secure_url; item.photo_mime_type = mime_type
     try: db.commit()
     except Exception as error:
         db.rollback()
-        if not previous_key:
-            try: delete_media(public_id)
-            except MediaStorageError: pass
+        # Only the newly uploaded asset is safe to delete when the DB commit
+        # fails. The previous photo must remain untouched.
+        try: delete_media(public_id)
+        except MediaStorageError: pass
         raise HTTPException(500, "Could not save staff photo reference") from error
     return {"message": "Staff photo saved", "photo_url": secure_url}
 
@@ -146,19 +152,17 @@ async def upload_photo(staff_id: int, file: UploadFile = File(...), user=Depends
 def delete_photo(staff_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
     _admin(user)
     item = _staff(db, staff_id, user.school_id)
-    key = item.photo_storage_key
+
+    # "Remove Photo" only unlinks the photo from the staff record. Keep the
+    # Cloudinary asset as a recovery/archive copy.
     item.photo_storage_key = None
     item.photo_storage_url = None
     item.photo_mime_type = None
     item.photo_data = None
     item.photo = None
     db.commit()
-    if key:
-        try:
-            delete_media(key)
-        except MediaStorageError:
-            pass
-    return {"message": "Staff photo removed"}
+
+    return {"message": "Staff photo removed; Cloudinary asset retained"}
 
 
 @router.get("/{staff_id}/photo")

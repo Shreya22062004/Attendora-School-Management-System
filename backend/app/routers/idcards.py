@@ -1,18 +1,12 @@
 """School-scoped 54 x 85 mm portrait ID cards for students and personnel."""
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from functools import lru_cache
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from PIL import Image, ImageOps
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase.pdfmetrics import stringWidth
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, defer
 
@@ -22,14 +16,7 @@ from ..database import get_db
 from ..media_storage import MediaStorageError, delete as delete_media, get_bytes as get_media, optimize_student_photo, put_bytes as put_media
 
 router = APIRouter(prefix="/idcards", tags=["ID Cards"])
-CARD_WIDTH = 54 * mm
-CARD_HEIGHT = 85 * mm
-CUT_GAP = 4 * mm
-COLS, ROWS = 3, 3
-PAGE_MARGIN_X = (A4[0] - COLS * CARD_WIDTH - (COLS - 1) * CUT_GAP) / 2
-PAGE_MARGIN_Y = (A4[1] - ROWS * CARD_HEIGHT - (ROWS - 1) * CUT_GAP) / 2
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "idcards"
-LOGO_PATH = Path(__file__).resolve().parents[1] / "odisha-govt-logo.png"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
@@ -271,14 +258,17 @@ async def upload_student_photo(student_id: int, file: UploadFile = File(...), us
     public_id = None
     secure_url = ""
     try:
+        # Every upload gets its own Cloudinary asset. This preserves the old
+        # photo when an administrator changes a student's photo.
         public_id, secure_url = put_media(
-            f"attendora/students/{item.id}", data, mime
+            f"attendora/students/{item.id}/{uuid4().hex}", data, mime
         )
     except MediaStorageError:
         # Keep the DB copy even if Cloudinary is temporarily unavailable.
         public_id = None
         secure_url = ""
 
+    item.photo = None
     item.photo_data = data
     item.photo_mime_type = mime
     item.photo_storage_key = public_id
@@ -288,7 +278,10 @@ async def upload_student_photo(student_id: int, file: UploadFile = File(...), us
         db.commit()
     except Exception as error:
         db.rollback()
-        if public_id and not previous:
+        # The new asset is unreferenced because the DB commit failed, so it is
+        # safe to remove ONLY this newly uploaded asset. Never remove the
+        # previous photo as part of replacing/changing a photo.
+        if public_id:
             try: delete_media(public_id)
             except MediaStorageError: pass
         raise HTTPException(500, "Could not save photo") from error
@@ -298,12 +291,22 @@ async def upload_student_photo(student_id: int, file: UploadFile = File(...), us
 
 @router.delete("/students/{student_id}/photo")
 def delete_student_photo(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    _admin(user); item = _student(db, student_id, user.school_id, include_photo=True); key = item.photo_storage_key
-    item.photo_storage_key = None; item.photo_storage_url = None; item.photo_data = None; item.photo_mime_type = None; item.photo = None; db.commit()
-    if key:
-        try: delete_media(key)
-        except MediaStorageError: pass
-    return {"message": "Student photo removed"}
+    _admin(user)
+    item = _student(db, student_id, user.school_id, include_photo=True)
+
+    # "Remove Photo" only unlinks the photo from the student record. The
+    # Cloudinary asset is intentionally retained so an accidental removal can
+    # be recovered and so the old photo remains available as an archive.
+    # Keep a non-deliverable recovery marker containing the old Cloudinary
+    # public ID. The marker is not treated as a photo by the legacy file loader.
+    item.photo = f"cloudinary-archive:{item.photo_storage_key}" if item.photo_storage_key else None
+    item.photo_storage_key = None
+    item.photo_storage_url = None
+    item.photo_data = None
+    item.photo_mime_type = None
+    db.commit()
+
+    return {"message": "Student photo removed; Cloudinary asset retained"}
 
 
 @router.get("/students/{student_id}/photo")
@@ -313,424 +316,9 @@ def get_student_photo(student_id: int, user=Depends(require_school_user), db: Se
     return Response(photo[0], media_type=photo[1], headers={"Cache-Control": "private, max-age=86400"})
 
 
-def _draw_image(pdf, source, x, y, width, height, placeholder="", signature=False):
-    if not source:
-        pdf.setFillColor(colors.HexColor("#fff7ee"))
-        pdf.rect(x, y, width, height, fill=1, stroke=0)
-        return
-    try:
-        if signature:
-            raw = source if isinstance(source, bytes) else Path(source).read_bytes()
-            png_bytes, _ = _remove_white_background_bytes(raw)
-            image = Image.open(BytesIO(png_bytes)).convert("RGBA")
-            bbox = image.getbbox()
-            if bbox:
-                image = image.crop(bbox)
-            iw, ih = image.size
-            scale = min(width / iw, height / ih)
-            dw, dh = iw * scale, ih * scale
-            pdf.drawImage(
-                ImageReader(image),
-                x + (width - dw) / 2,
-                y + (height - dh) / 2,
-                dw, dh,
-                mask="auto",
-            )
-            return
-
-        # JPEG photo bytes can be embedded directly. Avoid converting every
-        # 800px photo to RGBA before ReportLab draws a 22mm x 27mm image.
-        if isinstance(source, bytes) and source.startswith(b"\xff\xd8\xff"):
-            reader = ImageReader(BytesIO(source))
-            iw, ih = reader.getSize()
-            scale = min(width / iw, height / ih)
-            dw, dh = iw * scale, ih * scale
-            pdf.drawImage(
-                reader,
-                x + (width - dw) / 2,
-                y + (height - dh) / 2,
-                dw, dh,
-                preserveAspectRatio=True,
-                anchor="c",
-            )
-            return
-
-        image = ImageOps.exif_transpose(
-            Image.open(BytesIO(source) if isinstance(source, bytes) else source)
-        ).convert("RGBA")
-        iw, ih = image.size
-        scale = min(width / iw, height / ih)
-        dw, dh = iw * scale, ih * scale
-        pdf.drawImage(
-            ImageReader(image),
-            x + (width - dw) / 2,
-            y + (height - dh) / 2,
-            dw, dh,
-            mask="auto",
-        )
-    except Exception:
-        _draw_image(pdf, None, x, y, width, height, placeholder, signature)
-
-
-def _drop(pdf, x, y, value):
-    path = pdf.beginPath(); path.moveTo(x, y + 7 * mm); path.curveTo(x - 4.5 * mm, y + 1.5 * mm, x - 4.2 * mm, y - 3 * mm, x, y - 4.5 * mm); path.curveTo(x + 4.2 * mm, y - 3 * mm, x + 4.5 * mm, y + 1.5 * mm, x, y + 7 * mm); path.close()
-    pdf.setFillColor(colors.HexColor("#c6292f")); pdf.drawPath(path, fill=1, stroke=0)
-    if value:
-        pdf.setFillColor(colors.white); pdf.setFont("Helvetica-Bold", 6.6); pdf.drawCentredString(x, y, str(value)[:4])
-
-
-def _line(pdf, x, y, label, value, width=18 * mm):
-    pdf.setFillColor(colors.HexColor("#7b3e11"))
-    pdf.setFont("Helvetica-Bold", 5.55)
-    pdf.drawString(x, y, label)
-    pdf.setFillColor(colors.HexColor("#252525"))
-    pdf.setFont("Helvetica-Bold", 5.65)
-    text = str(value or "")
-    while text and pdf.stringWidth(text, "Helvetica-Bold", 5.65) > width:
-        text = text[:-1]
-    pdf.drawString(x + 11 * mm, y, text)
-
-
-def _wrap_words(text, font_name, font_size, max_width):
-    """Wrap text by words so long school/address strings stay inside the header."""
-    words = str(text or "").split()
-    if not words:
-        return []
-    lines, current = [], ""
-    for word in words:
-        candidate = f"{current} {word}".strip()
-        if not current or pdf_string_width(candidate, font_name, font_size) <= max_width:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
-
-
-def pdf_string_width(text, font_name, font_size):
-    return stringWidth(text, font_name, font_size)
-
-
-def _draw_centered_lines(pdf, lines, center_x, first_y, font_name, font_size, leading):
-    pdf.setFont(font_name, font_size)
-    for index, line in enumerate(lines):
-        pdf.drawCentredString(center_x, first_y - index * leading, line)
-
-
-def _draw_card(pdf, person, school, x, y, photo_data=None, signature_data=None):
-    """Draw the 54 x 85 mm portrait card to match the React preview."""
-    orange = colors.HexColor("#ec6414")
-    dark = colors.HexColor("#42230f")
-    cream = colors.HexColor("#fff7ee")
-
-    # Base card.
-    pdf.setFillColor(cream)
-    pdf.setStrokeColor(dark)
-    pdf.setLineWidth(.35 * mm)
-    pdf.roundRect(x, y, CARD_WIDTH, CARD_HEIGHT, 1.1 * mm, fill=1, stroke=1)
-
-    # ============================================================
-    # HEADER — 18 mm high, matching the reference composition.
-    # ============================================================
-    header_h = 18 * mm
-    header_y = y + CARD_HEIGHT - header_h
-    pdf.setFillColor(orange)
-    pdf.rect(x + .35 * mm, header_y, CARD_WIDTH - .7 * mm, header_h, fill=1, stroke=0)
-
-    if LOGO_PATH.is_file():
-        _draw_image(
-            pdf,
-            LOGO_PATH,
-            x + 2.25 * mm,
-            header_y + 2.45 * mm,
-            11.8 * mm,
-            12.7 * mm,
-            "",
-            False,
-        )
-
-    text_x = x + 14.7 * mm
-    text_w = CARD_WIDTH - 16.0 * mm
-    text_center_x = text_x + text_w / 2
-    school_name = (school.school_name or "").upper()
-    address = (school.address or "").upper()
-    udise_code = (school.udise_code or "").upper()
-
-    pdf.setFillColor(colors.white)
-
-    # School name: two centered lines, large and bold.
-    name_size = 7.45
-    name_lines = _wrap_words(school_name, "Helvetica-Bold", name_size, text_w)
-    while len(name_lines) > 2 and name_size > 6.0:
-        name_size -= .15
-        name_lines = _wrap_words(school_name, "Helvetica-Bold", name_size, text_w)
-    name_lines = name_lines[:2]
-    if name_lines:
-        _draw_centered_lines(
-            pdf,
-            name_lines,
-            text_center_x,
-            header_y + 13.7 * mm,
-            "Helvetica-Bold",
-            name_size,
-            3.25 * mm,
-        )
-
-    # Address: two centered lines, large and bold.
-    address_size = 4.25
-    address_lines = _wrap_words(address, "Helvetica-Bold", address_size, text_w)
-    while len(address_lines) > 2 and address_size > 3.2:
-        address_size -= .12
-        address_lines = _wrap_words(address, "Helvetica-Bold", address_size, text_w)
-    address_lines = address_lines[:2]
-    if address_lines:
-        _draw_centered_lines(
-            pdf,
-            address_lines,
-            text_center_x,
-            header_y + 6.9 * mm,
-            "Helvetica-Bold",
-            address_size,
-            3.0 * mm,
-        )
-
-    # UDISE is pushed down and enlarged.
-    udise_text = f"UDISE CODE : {udise_code}" if udise_code else ""
-    udise_size = 5.05
-    while udise_text and udise_size > 4.0 and pdf.stringWidth(udise_text, "Helvetica-Bold", udise_size) > text_w:
-        udise_size -= .1
-    if udise_text:
-        pdf.setFont("Helvetica-Bold", udise_size)
-        pdf.drawCentredString(text_center_x, header_y + 1.9 * mm, udise_text)
-
-    # ============================================================
-    # IDENTITY CARD heading.
-    # ============================================================
-    pdf.setFillColor(colors.HexColor("#253b9b"))
-    pdf.setFont("Helvetica-Bold", 9.1)
-    pdf.drawCentredString(x + CARD_WIDTH / 2, y + CARD_HEIGHT - 21.2 * mm, "IDENTITY CARD")
-
-    # ============================================================
-    # PHOTO + BLOOD GROUP.
-    # ============================================================
-    photo_w, photo_h = 22.2 * mm, 27.2 * mm
-    photo_x = x + (CARD_WIDTH - photo_w) / 2
-    photo_y = y + CARD_HEIGHT - 50.5 * mm
-
-    pdf.setFillColor(orange)
-    pdf.setStrokeColor(orange)
-    pdf.setLineWidth(.28 * mm)
-    pdf.roundRect(
-        photo_x - .3 * mm,
-        photo_y - .3 * mm,
-        photo_w + .6 * mm,
-        photo_h + .6 * mm,
-        .35 * mm,
-        fill=1,
-        stroke=1,
-    )
-
-    photo = photo_data if photo_data is not None else (_student_photo(person) if isinstance(person, models.Student) else _staff_photo(person))
-    _draw_image(pdf, photo[0] if photo else None, photo_x, photo_y, photo_w, photo_h)
-
-    _drop(pdf, x + 46.9 * mm, photo_y + 8.9 * mm, getattr(person, "blood_group", None))
-
-    # ============================================================
-    # NAME + DETAILS.
-    # ============================================================
-    name = str(person.name or "").upper()
-    name_size = 9.0
-    while name_size > 7.0 and pdf.stringWidth(name, "Helvetica-Bold", name_size) > CARD_WIDTH - 6 * mm:
-        name_size -= .15
-    pdf.setFillColor(dark)
-    pdf.setFont("Helvetica-Bold", name_size)
-    pdf.drawCentredString(x + CARD_WIDTH / 2, photo_y - 4.0 * mm, name)
-
-    if isinstance(person, models.Student):
-        rows = [
-            ("FATHER'S NAME", person.father_name),
-            ("MOTHER'S NAME", person.mother_name),
-            ("CONTACT NO", person.contact_number),
-            ("PEN NUMBER", person.pen_number),
-            ("DATE OF BIRTH", person.date_of_birth.strftime("%d/%m/%Y") if person.date_of_birth else None),
-        ]
-    else:
-        rows = [
-            ("DESIGNATION", person.designation),
-            ("FATHER/HUSBAND", person.father_husband_name),
-            ("LEVEL", person.level),
-            ("MOBILE NO", person.mobile_number),
-            ("DATE OF BIRTH", person.date_of_birth.strftime("%d/%m/%Y") if person.date_of_birth else None),
-        ]
-
-    # Larger detail rows with the same left/value alignment as the reference.
-    row_y = photo_y - 9.4 * mm
-    label_x = x + 4.0 * mm
-    value_w = CARD_WIDTH - 27.0 * mm
-    for label, value in rows:
-        _line(pdf, label_x, row_y, f"{label}:", value, value_w)
-        row_y -= 3.7 * mm
-
-    # ============================================================
-    # BOTTOM ORANGE WAVE + DEPARTMENT + SIGNATURE.
-    # ============================================================
-    bottom_y = y
-
-    path = pdf.beginPath()
-    left = x + .35 * mm
-    right = x + 39.5 * mm
-    base = bottom_y + .35 * mm
-    top = bottom_y + 9.7 * mm
-    path.moveTo(left, base)
-    path.lineTo(right, base)
-    path.curveTo(
-        right - 2.0 * mm,
-        base + 4.4 * mm,
-        right - 8.5 * mm,
-        top,
-        right - 17.0 * mm,
-        top,
-    )
-    path.lineTo(left, top)
-    path.close()
-    pdf.setFillColor(orange)
-    pdf.drawPath(path, fill=1, stroke=0)
-
-    # Full-width lower orange strip.
-    pdf.setFillColor(orange)
-    pdf.rect(x + .35 * mm, bottom_y + .35 * mm, CARD_WIDTH - .7 * mm, 5.15 * mm, fill=1, stroke=0)
-
-    # Reference uses an ampersand and the text fills the orange strip.
-    department = "SCHOOL & MASS EDUCATION DEPARTMENT"
-    department_size = 6.15
-    department_max_width = CARD_WIDTH - 4.5 * mm
-    while department_size > 4.8 and pdf.stringWidth(department, "Helvetica-Bold", department_size) > department_max_width:
-        department_size -= .1
-    pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", department_size)
-    pdf.drawCentredString(x + 26.5 * mm, bottom_y + 1.65 * mm, department)
-
-    # Signature above HEADMASTER, both on the cream area.
-    signature = signature_data if signature_data is not None else _school_signature(school)
-    # Larger signature area: the transparent signature/seal is intentionally
-    # given more room while staying above the HEADMASTER label and inside the
-    # cream portion of the card.
-    sig_x = x + 35.8 * mm
-    sig_w, sig_h = 17.0 * mm, 5.8 * mm
-    if signature:
-        _draw_image(pdf, signature[0], sig_x, bottom_y + 5.65 * mm, sig_w, sig_h, "", True)
-
-    pdf.setFillColor(dark)
-    pdf.setFont("Helvetica-Bold", 6.0)
-    pdf.drawCentredString(sig_x + sig_w / 2, bottom_y + 4.45 * mm, "HEADMASTER")
-
-
-def _person_photo(person):
-    try:
-        return _student_photo(person) if isinstance(person, models.Student) else _staff_photo(person)
-    except Exception:
-        return None
-
-
-def _pdf_response(people, school, filename, db=None):
-    """Generate selected cards efficiently for large bulk runs."""
-    people = list(people)
-    signature = _school_signature(school)
-    photos = {}
-    remote_indexes = []
-    backfilled_students = []
-
-    # The main Student query intentionally defers photo_data so listing/lookup
-    # queries do not pull hundreds of BYTEA images into memory. Fetch all local
-    # student images needed for this PDF in ONE query instead of triggering an
-    # N+1 deferred-column query while drawing cards.
-    if db:
-        student_ids = [
-            person.id for person in people if isinstance(person, models.Student)
-        ]
-        if student_ids:
-            local_rows = (
-                db.query(
-                    models.Student.id,
-                    models.Student.photo_data,
-                    models.Student.photo_mime_type,
-                )
-                .filter(
-                    models.Student.school_id == school.id,
-                    models.Student.id.in_(student_ids),
-                    models.Student.photo_data.isnot(None),
-                )
-                .all()
-            )
-            local_by_id = {
-                row.id: (row.photo_data, row.photo_mime_type or "image/jpeg")
-                for row in local_rows
-            }
-            for index, person in enumerate(people):
-                if isinstance(person, models.Student) and person.id in local_by_id:
-                    photos[index] = local_by_id[person.id]
-
-    # Only legacy Cloudinary-only records need remote I/O.
-    for index, person in enumerate(people):
-        if index in photos:
-            continue
-        if isinstance(person, models.Student) and (
-            person.photo_storage_key or person.photo_storage_url
-        ):
-            remote_indexes.append(index)
-        elif isinstance(person, models.Staff) and person.photo_storage_key:
-            remote_indexes.append(index)
-
-    if remote_indexes:
-        # Keep outbound concurrency bounded. Too many simultaneous Cloudinary
-        # requests can saturate a small Hugging Face Space and make a bulk PDF
-        # request slower rather than faster.
-        max_workers = min(16, len(remote_indexes))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(_person_photo, people[index]): index
-                for index in remote_indexes
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                result = future.result()
-                if result:
-                    photos[index] = result
-
-                    # Backfill legacy student photos into PostgreSQL after a
-                    # successful remote fetch. Future PDF requests then avoid
-                    # Cloudinary completely for that student.
-                    person = people[index]
-                    if db and isinstance(person, models.Student):
-                        person.photo_data = result[0]
-                        person.photo_mime_type = result[1] or "image/jpeg"
-                        backfilled_students.append(person)
-
-        if db and backfilled_students:
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-
-    stream = BytesIO()
-    pdf = canvas.Canvas(stream, pagesize=A4, pageCompression=1)
-    for index, person in enumerate(people):
-        slot = index % (COLS * ROWS)
-        if slot == 0 and index:
-            pdf.showPage()
-        column, row = slot % COLS, slot // COLS
-        x = PAGE_MARGIN_X + column * (CARD_WIDTH + CUT_GAP)
-        y = A4[1] - PAGE_MARGIN_Y - CARD_HEIGHT - row * (CARD_HEIGHT + CUT_GAP)
-        _draw_card(pdf, person, school, x, y, photo_data=photos.get(index), signature_data=signature)
-    pdf.save()
-    stream.seek(0)
-    return StreamingResponse(
-        stream,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+# ID-card PDF generation is intentionally handled by the browser print engine.
+# The live preview and print sheet both render PersonIDCard in React, ensuring
+# there is one source of truth for the visual design.
 
 
 def _docx_response(people, school, filename):
@@ -809,61 +397,7 @@ def _docx_response(people, school, filename):
     )
 
 
-@router.post("/print.pdf")
-def print_selected_cards(payload: dict, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    """Generate a real A4 PDF for exactly the cards selected in the ID-card table."""
-    student_ids = [int(value) for value in (payload.get("student_ids") or [])]
-    staff_ids = [int(value) for value in (payload.get("staff_ids") or [])]
-    if not student_ids and not staff_ids:
-        raise HTTPException(400, "Select at least one person to generate the PDF")
-
-    students = {
-        item.id: item
-        for item in db.query(models.Student).options(
-            defer(models.Student.photo_data)
-        ).filter(
-            models.Student.school_id == user.school_id,
-            models.Student.is_active == True,
-            models.Student.id.in_(student_ids),
-        ).all()
-    } if student_ids else {}
-    staff = {
-        item.id: item
-        for item in db.query(models.Staff).filter(
-            models.Staff.school_id == user.school_id,
-            models.Staff.is_active == True,
-            models.Staff.id.in_(staff_ids),
-        ).all()
-    } if staff_ids else {}
-
-    missing_students = [value for value in student_ids if value not in students]
-    missing_staff = [value for value in staff_ids if value not in staff]
-    if missing_students or missing_staff:
-        raise HTTPException(404, "One or more selected people could not be found")
-
-    # Preserve the exact order shown/selected by the frontend: students first
-    # in the request, followed by staff. Duplicate IDs are removed.
-    people = []
-    seen = set()
-    for value in student_ids:
-        if value not in seen:
-            people.append(students[value])
-            seen.add(value)
-    for value in staff_ids:
-        key = ("staff", value)
-        if key not in seen:
-            people.append(staff[value])
-            seen.add(key)
-
-    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "id-cards.pdf", db=db)
-
-
-@router.get("/staff/bulk.pdf")
-def bulk_staff_cards(staff_type: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    query = db.query(models.Staff).filter(models.Staff.school_id == user.school_id, models.Staff.is_active == True)
-    if staff_type: query = query.filter(models.Staff.staff_type == staff_type.upper())
-    return _pdf_response(query.order_by(models.Staff.name).all(), _school(db, user.school_id, include_signature=True), "staff-id-cards.pdf", db=db)
-
+# No /print.pdf endpoint: the frontend prints the exact React preview DOM.
 
 @router.get("/staff/bulk.docx")
 def bulk_staff_docx(staff_type: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
@@ -872,22 +406,7 @@ def bulk_staff_docx(staff_type: str | None = None, user=Depends(require_school_u
     return _docx_response(query.order_by(models.Staff.name).all(), _school(db, user.school_id, include_signature=True), "staff-id-cards.docx")
 
 
-@router.get("/staff/{staff_id}.pdf")
-def staff_card(staff_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    return _pdf_response([_staff(db, staff_id, user.school_id)], _school(db, user.school_id, include_signature=True), f"staff-id-card-{staff_id}.pdf", db=db)
-
-
-@router.get("/bulk.pdf")
-def bulk_student_cards(class_name: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    people = _student_query(db, user.school_id, class_name).all()
-    return _pdf_response(people, _school(db, user.school_id, include_signature=True), "student-id-cards.pdf", db=db)
-
-
 @router.get("/bulk.docx")
 def bulk_student_docx(class_name: str | None = None, user=Depends(require_school_user), db: Session = Depends(get_db)):
     return _docx_response(_student_query(db, user.school_id, class_name).all(), _school(db, user.school_id, include_signature=True), "student-id-cards.docx")
 
-
-@router.get("/{student_id}.pdf")
-def student_card(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    return _pdf_response([_student(db, student_id, user.school_id, include_photo=True)], _school(db, user.school_id, include_signature=True), f"student-id-card-{student_id}.pdf", db=db)

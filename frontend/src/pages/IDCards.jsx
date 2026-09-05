@@ -90,7 +90,7 @@ export default function IDCards() {
   const isAdmin = (localStorage.getItem("school_role") || "teacher") === "school_admin";
   const [students, setStudents] = useState([]), [staff, setStaff] = useState([]), [classes, setClasses] = useState([]), [settings, setSettings] = useState({});
   const [cardType, setCardType] = useState("ALL"), [classFilter, setClassFilter] = useState(""), [search, setSearch] = useState(""), [year, setYear] = useState("");
-  const [message, setMessage] = useState(""), [busy, setBusy] = useState(""), [previewKey, setPreviewKey] = useState(""), [refreshKey, setRefreshKey] = useState(0), [photoEditor, setPhotoEditor] = useState(null);
+  const [message, setMessage] = useState(""), [busy, setBusy] = useState(""), [previewKey, setPreviewKey] = useState(""), [refreshKey, setRefreshKey] = useState(0), [printJob, setPrintJob] = useState(null), [photoEditor, setPhotoEditor] = useState(null);
   const load = async () => { try { const [studentResponse, staffResponse, configResponse, settingsResponse] = await Promise.all([api.get("/idcards/students"), api.get("/staff"), api.get("/settings/config"), api.get("/idcards/settings")]); setStudents((studentResponse.data.students || []).map(item => ({ ...item, kind: "student" }))); setStaff((staffResponse.data || []).map(item => ({ ...item, kind: "staff" }))); setClasses(configResponse.data.classes || []); setSettings(settingsResponse.data); setYear(settingsResponse.data.established_year || ""); } catch (error) { setMessage(error.response?.data?.detail || "Could not load ID cards"); } };
   useEffect(() => { load(); }, []);
   const people = useMemo(() => [...students, ...staff].filter(person => { const typeMatch = cardType === "ALL" || (cardType === "STUDENTS" ? person.kind === "student" : person.kind === "staff" && person.staff_type === cardType); const classMatch = person.kind !== "student" || !classFilter || person.class_name === classFilter; const term = search.trim().toLowerCase(); const searchMatch = !term || [person.name, person.contact_number, person.mobile_number, person.class_name, person.designation].some(value => String(value || "").toLowerCase().includes(term)); return typeMatch && classMatch && searchMatch; }), [students, staff, cardType, classFilter, search]);
@@ -105,51 +105,105 @@ export default function IDCards() {
     setBusy("print");
     setMessage("");
     try {
-      const payload = {
-        student_ids: selected.filter(person => person.kind === "student").map(person => person.id),
-        staff_ids: selected.filter(person => person.kind === "staff").map(person => person.id),
+      // IMPORTANT: ID-card printing intentionally uses the exact same React
+      // component as the live preview. There is NO server-side PDF renderer.
+      // Chrome's print engine converts this DOM to the PDF, so preview and
+      // saved PDF cannot drift into two different designs.
+      const toDataUrl = async path => {
+        const response = await api.get(path, { responseType: "blob" });
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(response.data);
+        });
       };
-      const response = await api.post("/idcards/print.pdf", payload, {
-        responseType: "blob",
-        timeout: 300000,
-      });
-      if (!response.data || response.data.size === 0) {
-        throw new Error("The generated PDF is empty");
-      }
 
-      // Do not download a JSON/HTML error response as a .pdf file.
-      const pdfHeader = await response.data.slice(0, 5).text();
-      if (pdfHeader !== "%PDF-") {
-        let serverMessage = "";
+      // Prefer the already-known Cloudinary URL. This avoids making another
+      // protected API request for every Cloudinary-backed photo. Records that
+      // have no public URL fall back to the authenticated photo endpoint.
+      const photoEntries = await Promise.allSettled(
+        selected
+          .filter(person => person.photo_uploaded)
+          .map(async person => {
+            const key = `${person.kind}-${person.id}`;
+            const source = person.photo_url || await toDataUrl(
+              person.kind === "student"
+                ? `/idcards/students/${person.id}/photo`
+                : `/staff/${person.id}/photo`
+            );
+            return [key, source];
+          })
+      );
+      const photos = Object.fromEntries(
+        photoEntries
+          .filter(result => result.status === "fulfilled")
+          .map(result => result.value)
+      );
+
+      let signature = settings.headmaster_signature_url || "";
+      if (settings.has_headmaster_signature && !signature) {
         try {
-          const text = await response.data.text();
-          const parsed = JSON.parse(text);
-          serverMessage = parsed.detail || "";
+          signature = await toDataUrl("/idcards/settings/signature");
         } catch {
-          /* keep the fallback below */
+          signature = "";
         }
-        throw new Error(serverMessage || "The server did not return a valid PDF");
       }
 
-      const url = URL.createObjectURL(response.data);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "id-cards.pdf";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      // 9 cards per A4 page: the @media print CSS defines the exact physical
+      // 54 x 85 mm card and 3 x 3 grid.
+      const pages = Array.from(
+        { length: Math.ceil(selected.length / 9) },
+        (_, index) => selected.slice(index * 9, index * 9 + 9)
+      );
+      setPrintJob({ pages, photos, signature });
 
-      // Give the browser time to start the download before releasing the blob.
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      // Let React mount the print DOM before invoking Chrome's print engine.
+      await new Promise(resolve =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      );
+      if (document.fonts?.ready) await document.fonts.ready;
+
+      const images = Array.from(
+        document.querySelectorAll(".idcard-print-root img")
+      );
+      await Promise.all(
+        images.map(image => image.complete
+          ? Promise.resolve()
+          : new Promise(resolve => {
+              image.addEventListener("load", resolve, { once: true });
+              image.addEventListener("error", resolve, { once: true });
+            })
+        )
+      );
+
+      // Keep the print DOM mounted until Chrome finishes its print lifecycle.
+      await new Promise(resolve => {
+        const completePrint = () => {
+          window.removeEventListener("afterprint", completePrint);
+          setTimeout(resolve, 250);
+        };
+        window.addEventListener("afterprint", completePrint, { once: true });
+        window.print();
+      });
     } catch (error) {
-      let detail = error.response?.data?.detail;
-      if (error.response?.data instanceof Blob) {
-        try { detail = JSON.parse(await error.response.data.text()).detail; } catch { /* keep fallback */ }
-      }
-      setMessage(detail || error.message || "Could not generate ID cards PDF");
+      setMessage(error.response?.data?.detail || error.message || "Could not prepare ID cards for printing");
     } finally {
       setBusy("");
     }
   };
-  return <><header className="page-head"><div><p className="eyebrow">SCHOOL IDENTITY</p><h1>ID Cards</h1><p className="muted">54 x 86 mm portrait cards - print at Actual Size / 100%.</p></div><button className="primary-btn" disabled={busy === "print"} onClick={() => printCards(people)}>{busy === "print" ? "Generating PDF..." : "Print / Save PDF"}</button></header>{message && <div className="alert">{message}</div>}<section className="panel"><div className="form-grid"><label>Established Year<input value={year} disabled={!isAdmin} maxLength="4" onChange={event => setYear(event.target.value.replace(/\D/g, ""))}/></label>{isAdmin && <button type="button" className="primary-btn" onClick={saveYear}>Save Year</button>}<label>Headmaster Signature<input type="file" accept="image/png,image/jpeg" disabled={!isAdmin || busy === "signature"} onChange={event => { uploadSignature(event.target.files?.[0]); event.target.value = ""; }}/></label></div></section>{preview && <section className="panel idcard-preview-panel"><div className="panel-title-row"><div><h2>Card Preview</h2><p className="muted">The live preview and A4 print sheet use the same 54 x 86 mm portrait layout. Cards without photos are also printed with an empty photo box.</p></div><span className="badge">{preview.name}</span></div><div className="idcard-preview-wrap"><PersonIDCard person={preview} settings={settings} protectedImages refreshKey={refreshKey}/></div></section>}<section className="panel"><div className="panel-title-row"><div><h2>Student, Staff and SMC ID Cards</h2><p className="muted">All selected people are included in bulk printing; cards without photos keep an empty photo box.</p></div><div className="filters"><select value={cardType} onChange={event => setCardType(event.target.value)}><option value="ALL">All</option><option value="STUDENTS">Students</option><option value="TEACHER">Teachers</option><option value="STAFF">Staff</option><option value="SMC_MEMBER">SMC Members</option></select>{(cardType === "ALL" || cardType === "STUDENTS") && <select value={classFilter} onChange={event => setClassFilter(event.target.value)}><option value="">All Classes</option>{classes.map(item => <option key={item} value={item}>{item}</option>)}</select>}<input className="search" placeholder="Search name, mobile, class or designation" value={search} onChange={event => setSearch(event.target.value)}/></div></div><div className="idcard-photo-summary" aria-label="Photo upload summary"><div className="idcard-summary-card"><span>Total ID Cards</span><strong>{people.length}</strong></div><div className="idcard-summary-card uploaded"><span>Photos Uploaded</span><strong>{uploadedPhotoCount}</strong></div><div className="idcard-summary-card pending"><span>Photos Pending</span><strong>{pendingPhotoCount}</strong></div></div><div className="table-wrap"><table><thead><tr><th>Person</th><th>Type</th><th>Class / Designation</th><th>Photo</th><th>Actions</th></tr></thead><tbody>{people.map(person => <tr key={`${person.kind}-${person.id}`}><td><strong>{person.name}</strong></td><td>{person.kind === "student" ? "Student" : person.staff_type.replace("_", " ")}</td><td>{person.kind === "student" ? `${person.class_name}${person.section ? ` / ${person.section}` : ""}` : person.designation || "-"}</td><td>{person.photo_uploaded ? <div className="idcard-photo-status"><ProtectedImage src={person.photo_url} path={person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`} className="staff-thumb" alt={`${person.name} photo`} /><span>Uploaded</span></div> : "Pending"}</td><td><div className="row-actions"><button type="button" className="edit-btn" onClick={() => setPreviewKey(`${person.kind}-${person.id}`)}>Preview</button>{isAdmin && <><label className="upload-btn">{person.photo_uploaded ? "Change Photo" : "Upload Photo"}<input type="file" accept="image/png,image/jpeg" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label><label className="upload-btn">Use Camera<input type="file" accept="image/png,image/jpeg" capture="environment" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label>{person.photo_uploaded && <button type="button" className="danger-btn" onClick={async () => { try { await api.delete(person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`); await load(); setRefreshKey(value => value + 1); } catch (error) { setMessage(error.response?.data?.detail || "Could not remove photo"); } }}>Remove Photo</button>}</>}<button type="button" onClick={() => printCards([person])}>Generate ID Card</button></div></td></tr>)}</tbody></table></div>{!people.length && <div className="empty">No matching people found.</div>}</section>{photoEditor && <PhotoAdjuster file={photoEditor.file} person={photoEditor.person} onCancel={() => setPhotoEditor(null)} onSave={uploadStudentPhoto}/>}</>;
+
+  return <><header className="page-head"><div><p className="eyebrow">SCHOOL IDENTITY</p><h1>ID Cards</h1><p className="muted">54 x 86 mm portrait cards - print at Actual Size / 100%.</p></div><button className="primary-btn" disabled={busy === "print"} onClick={() => printCards(people)}>{busy === "print" ? "Generating PDF..." : "Print / Save PDF"}</button></header>{message && <div className="alert">{message}</div>}<section className="panel"><div className="form-grid"><label>Established Year<input value={year} disabled={!isAdmin} maxLength="4" onChange={event => setYear(event.target.value.replace(/\D/g, ""))}/></label>{isAdmin && <button type="button" className="primary-btn" onClick={saveYear}>Save Year</button>}<label>Headmaster Signature<input type="file" accept="image/png,image/jpeg" disabled={!isAdmin || busy === "signature"} onChange={event => { uploadSignature(event.target.files?.[0]); event.target.value = ""; }}/></label></div></section>{preview && <section className="panel idcard-preview-panel"><div className="panel-title-row"><div><h2>Card Preview</h2><p className="muted">The live preview and A4 print sheet use the same 54 x 86 mm portrait layout. Cards without photos are also printed with an empty photo box.</p></div><span className="badge">{preview.name}</span></div><div className="idcard-preview-wrap"><PersonIDCard person={preview} settings={settings} protectedImages refreshKey={refreshKey}/></div></section>}<section className="panel"><div className="panel-title-row"><div><h2>Student, Staff and SMC ID Cards</h2><p className="muted">All selected people are included in bulk printing; cards without photos keep an empty photo box.</p></div><div className="filters"><select value={cardType} onChange={event => setCardType(event.target.value)}><option value="ALL">All</option><option value="STUDENTS">Students</option><option value="TEACHER">Teachers</option><option value="STAFF">Staff</option><option value="SMC_MEMBER">SMC Members</option></select>{(cardType === "ALL" || cardType === "STUDENTS") && <select value={classFilter} onChange={event => setClassFilter(event.target.value)}><option value="">All Classes</option>{classes.map(item => <option key={item} value={item}>{item}</option>)}</select>}<input className="search" placeholder="Search name, mobile, class or designation" value={search} onChange={event => setSearch(event.target.value)}/></div></div><div className="idcard-photo-summary" aria-label="Photo upload summary"><div className="idcard-summary-card"><span>Total ID Cards</span><strong>{people.length}</strong></div><div className="idcard-summary-card uploaded"><span>Photos Uploaded</span><strong>{uploadedPhotoCount}</strong></div><div className="idcard-summary-card pending"><span>Photos Pending</span><strong>{pendingPhotoCount}</strong></div></div><div className="table-wrap"><table><thead><tr><th>Person</th><th>Type</th><th>Class / Designation</th><th>Photo</th><th>Actions</th></tr></thead><tbody>{people.map(person => <tr key={`${person.kind}-${person.id}`}><td><strong>{person.name}</strong></td><td>{person.kind === "student" ? "Student" : person.staff_type.replace("_", " ")}</td><td>{person.kind === "student" ? `${person.class_name}${person.section ? ` / ${person.section}` : ""}` : person.designation || "-"}</td><td>{person.photo_uploaded ? <div className="idcard-photo-status"><ProtectedImage src={person.photo_url} path={person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`} className="staff-thumb" alt={`${person.name} photo`} /><span>Uploaded</span></div> : "Pending"}</td><td><div className="row-actions"><button type="button" className="edit-btn" onClick={() => setPreviewKey(`${person.kind}-${person.id}`)}>Preview</button>{isAdmin && <><label className="upload-btn">{person.photo_uploaded ? "Change Photo" : "Upload Photo"}<input type="file" accept="image/png,image/jpeg" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label><label className="upload-btn">Use Camera<input type="file" accept="image/png,image/jpeg" capture="environment" onChange={event => { const file = event.target.files?.[0]; if (file) setPhotoEditor({ person, file }); event.target.value = ""; }}/></label>{person.photo_uploaded && <button type="button" className="danger-btn" onClick={async () => {
+  const confirmed = window.confirm(
+    `Remove ${person.name}'s photo from Attendora?\n\nThe photo will be removed from this ID-card record, but the Cloudinary asset will NOT be deleted.`
+  );
+  if (!confirmed) return;
+  try {
+    await api.delete(person.kind === "student" ? `/idcards/students/${person.id}/photo` : `/staff/${person.id}/photo`);
+    await load();
+    setRefreshKey(value => value + 1);
+  } catch (error) {
+    setMessage(error.response?.data?.detail || "Could not remove photo");
+  }
+}}>Remove Photo</button>}</>}<button type="button" onClick={() => printCards([person])}>Generate ID Card</button></div></td></tr>)}</tbody></table></div>{!people.length && <div className="empty">No matching people found.</div>}</section>{printJob && <div className="idcard-print-root">{printJob.pages.map((page, index) => <div className="idcard-print-page" key={index}>{page.map(person => <PersonIDCard key={`${person.kind}-${person.id}`} person={person} settings={settings} photoSrc={printJob.photos[`${person.kind}-${person.id}`]} signatureSrc={printJob.signature}/>)}</div>)}</div>}{photoEditor && <PhotoAdjuster file={photoEditor.file} person={photoEditor.person} onCancel={() => setPhotoEditor(null)} onSave={uploadStudentPhoto}/>}</>;
 }
