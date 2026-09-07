@@ -1,13 +1,65 @@
 from fastapi import APIRouter,Depends,HTTPException
 from sqlalchemy.orm import Session, defer
 from sqlalchemy import or_,func,case
-from datetime import date
+from datetime import date,datetime,timedelta
 from typing import List
+import pandas as pd
+import io
+import json
+import re
 from ..database import get_db
 from .. import models,schemas
 from ..auth import require_school_user
 router=APIRouter(prefix='/students',tags=['Students'])
 def clean(v): return v.strip() if v and v.strip() else None
+
+
+def parse_excel_date(value, field_name="date"):
+ # Accept Excel-native dates, Excel serial numbers, and common text formats.
+ if value is None:
+  return None
+ try:
+  if pd.isna(value):
+   return None
+ except Exception:
+  pass
+ if isinstance(value, datetime):
+  return value.date()
+ if isinstance(value, date):
+  return value
+ if isinstance(value, (int,float)) and not isinstance(value,bool):
+  number=float(value)
+  if number <= 0 or number > 60000:
+   raise ValueError(f"Invalid {field_name}: {value}")
+  return (datetime(1899,12,30)+timedelta(days=number)).date()
+ text=str(value).strip()
+ if not text:
+  return None
+ # Excel/text exports sometimes contain repeated separators. Normalize them.
+ text=re.sub(r"\s+", "", text)
+ text=re.sub(r"[-/\\]+", "-", text)
+ parts=text.split("-")
+ try:
+  if len(parts)==3:
+   a,b,c=parts
+   # YYYY-MM-DD / YYYY-M-D
+   if len(a)==4:
+    return date(int(a), int(b), int(c))
+   # MM-DD-YYYY or DD-MM-YYYY. If one side is >12 it determines the day.
+   if len(c)==4:
+    first,second=int(a),int(b)
+    if first>12 and second<=12:
+     day,month=first,second
+    elif second>12 and first<=12:
+     month,day=first,second
+    else:
+     # For ambiguous values, prefer the user's stated MM/DD/YYYY format.
+     month,day=first,second
+    return date(int(c),month,day)
+  return pd.to_datetime(text, errors="raise").date()
+ except Exception:
+  raise ValueError(f"Invalid {field_name}: '{text}'. Use a valid date such as YYYY-MM-DD or MM/DD/YYYY.")
+
 def validate(data,db,sid,student_id=None):
  if not data.name.strip(): raise HTTPException(400,'Invalid student data')
  if data.admission_date and data.admission_date > date.today(): raise HTTPException(400,"Admission date cannot be later than today's date")
@@ -16,14 +68,15 @@ def validate(data,db,sid,student_id=None):
   import json
   allowed=json.loads(cfg.classes_json or '[]')
   if allowed and data.class_name not in allowed: raise HTTPException(400,'Class is not configured for this school')
- g=data.gender.strip().title();
+ g=data.gender.strip().title()
  if g not in ('Boy','Girl'): raise HTTPException(400,'Gender must be Boy or Girl')
  adm,pen=clean(data.admission_no),clean(data.pen_number)
  for col,val,msg in [(models.Student.admission_no,adm,'Admission number already exists'),(models.Student.pen_number,pen,'PEN number already exists')]:
   if val:
    q=db.query(models.Student.id).filter(models.Student.school_id==sid,col==val)
-   if student_id:q=q.filter(models.Student.id!=student_id)
-   if q.first():raise HTTPException(400,msg)
+   if student_id is not None:
+    q=q.filter(models.Student.id!=student_id)
+   if q.first(): raise HTTPException(400,msg)
  return g,adm,pen
 @router.get('',response_model=List[schemas.StudentOut])
 def list_students(class_name:str|None=None,active_only:bool=True,search:str|None=None,u=Depends(require_school_user),db:Session=Depends(get_db)):
@@ -115,7 +168,7 @@ def stats(u=Depends(require_school_user),db:Session=Depends(get_db)):
  cats=[{'category':k,'count':v} for k,v in sorted(merged.items())];return {'categories':cats,'grand_total':sum(x['count'] for x in cats)}
 
 from fastapi import UploadFile,File
-import pandas as pd, io, json
+
 @router.post('/import')
 async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(require_school_user),db:Session=Depends(get_db)):
  if mode not in ('merge','replace'): raise HTTPException(400,'mode must be merge or replace')
@@ -151,8 +204,13 @@ async def import_students(mode:str='merge',file:UploadFile=File(...),u=Depends(r
    gen=gender_map.get((val('gender') or '').lower(),(val('gender') or '').title())
    cat=val('category')
    if cat and '-' in cat and cat.split('-',1)[0].strip().isdigit(): cat=cat.split('-',1)[1].strip()
-   data=schemas.StudentCreate(name=val('name') or '',class_name=cls,gender=gen,section=val('section'),stream=val('stream'),admission_no=val('admission_no'),pen_number=val('pen_number'),father_name=val('father_name'),mother_name=val('mother_name'),contact_number=val('contact_number'),blood_group=val('blood_group'),date_of_birth=pd.to_datetime(row.get('date_of_birth')).date() if 'date_of_birth' in df.columns and not pd.isna(row.get('date_of_birth')) else None,category=cat,admission_date=pd.to_datetime(row.get('admission_date')).date() if 'admission_date' in df.columns and not pd.isna(row.get('admission_date')) else None)
-   g,a,p=validate(data,db,u.school_id); prepared.append((data,g,a,p))
+   data=schemas.StudentCreate(name=val('name') or '',class_name=cls,gender=gen,section=val('section'),stream=val('stream'),admission_no=val('admission_no'),pen_number=val('pen_number'),father_name=val('father_name'),mother_name=val('mother_name'),contact_number=val('contact_number'),blood_group=val('blood_group'),date_of_birth=parse_excel_date(row.get('date_of_birth'),'Date of Birth') if 'date_of_birth' in df.columns else None,category=cat,admission_date=parse_excel_date(row.get('admission_date'),'Admission Date') if 'admission_date' in df.columns else None)
+   existing_by_adm=db.query(models.Student.id).filter(models.Student.school_id==u.school_id,models.Student.admission_no==clean(data.admission_no)).first() if clean(data.admission_no) else None
+   existing_by_pen=db.query(models.Student.id).filter(models.Student.school_id==u.school_id,models.Student.pen_number==clean(data.pen_number)).first() if clean(data.pen_number) else None
+   if existing_by_adm and existing_by_pen and existing_by_adm.id!=existing_by_pen.id:
+    raise HTTPException(400,'Admission No and PEN Number belong to different existing students')
+   existing_id=(existing_by_adm or existing_by_pen).id if (existing_by_adm or existing_by_pen) else None
+   g,a,p=validate(data,db,u.school_id,existing_id); prepared.append((data,g,a,p))
   except Exception as e: errors.append({'row':int(idx)+2,'error':str(e.detail if isinstance(e,HTTPException) else e)})
  if errors: raise HTTPException(400,{'message':'Import cancelled. Fix the invalid rows; existing directory was not changed.','errors':errors[:50]})
  # Two safe modes:

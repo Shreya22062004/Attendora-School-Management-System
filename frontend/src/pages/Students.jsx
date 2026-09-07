@@ -86,9 +86,23 @@ export default function Students() {
   const importFile = async (file) => {
     if (!file) return;
     if(importMode === "replace" && !window.confirm("Replace mode will deactivate active students missing from this file. Historical attendance is preserved. Continue?")) return;
-    const fd=new FormData(); fd.append("file",file);
-    try { const r=await api.post(`/students/import?mode=${importMode}`,fd,{headers:{"Content-Type":"multipart/form-data"}});setMessage(r.data.message);load(); }
-    catch(e){const d=e.response?.data?.detail;setMessage(typeof d === "string" ? d : (d?.message || "Import failed"));}
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    setMessage(`Uploading ${file.name}...`);
+    try {
+      // Do not set Content-Type manually. The browser must add the multipart boundary.
+      const r = await api.post(`/students/import?mode=${encodeURIComponent(importMode)}`, fd);
+      setMessage(r.data?.message || "Student import completed successfully.");
+      await load();
+    } catch(e) {
+      const d = e.response?.data?.detail;
+      if (d && typeof d === "object") {
+        const rows = Array.isArray(d.errors) ? d.errors.slice(0, 10).map(x => `Row ${x.row}: ${x.error}`).join("\n") : "";
+        setMessage([d.message || "Import failed.", rows].filter(Boolean).join("\n"));
+      } else {
+        setMessage(typeof d === "string" ? d : (e.message || "Import failed"));
+      }
+    }
   };
 
   const load = async () => {
