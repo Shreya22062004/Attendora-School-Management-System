@@ -1,5 +1,6 @@
 import os,hashlib
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base,engine,SessionLocal
 from .models import User,School,SchoolConfig
@@ -85,8 +86,12 @@ def seed():
 app = FastAPI(title="Multi-School Attendance System")
 
 origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
 ]
 
 app.add_middleware(
@@ -115,5 +120,14 @@ for r in [
 @app.get('/')
 def root():return {'message':'Multi-School Attendance API is running'}
 @app.get('/health')
-def health():return {'status':'ok','database':'connected'}
+def health():
+ try:
+  with engine.connect() as connection:
+   connection.execute(text("SELECT 1"))
+  return {'status':'ok','database':'connected'}
+ except SQLAlchemyError:
+  # Do not expose connection strings or database internals in a public health
+  # response. Returning 503 lets the deployment platform distinguish an
+  # unavailable database from a healthy API process.
+  return JSONResponse(status_code=503, content={'status':'unavailable','database':'unavailable'})
 

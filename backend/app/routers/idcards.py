@@ -101,15 +101,18 @@ def _cached_remote_photo(public_id: str, secure_url: str):
 
 
 def _student_photo(student):
-    # Local DB bytes are the fastest/reliable primary copy. Cloudinary is only
-    # a fallback for older records that do not have the local binary copy.
-    if student.photo_data:
-        return student.photo_data, student.photo_mime_type or "image/jpeg"
+    # Cloudinary is the primary media store. Legacy BYTEA remains a read-only
+    # fallback during the gradual migration so existing students do not lose
+    # their photographs.
     if student.photo_storage_key or student.photo_storage_url:
-        return _cached_remote_photo(
+        remote_photo = _cached_remote_photo(
             student.photo_storage_key or "",
             student.photo_storage_url or "",
         )
+        if remote_photo:
+            return remote_photo
+    if student.photo_data:
+        return student.photo_data, student.photo_mime_type or "image/jpeg"
     return _legacy_image(student.photo)
 
 
@@ -123,13 +126,13 @@ def _staff_photo(staff):
 
 
 def _school_signature(school):
-    # Use the transparent DB copy first. This avoids a Cloudinary round trip for
-    # every PDF request and keeps the signature available if Cloudinary is slow.
-    if school and school.headmaster_signature_data:
-        return school.headmaster_signature_data, school.headmaster_signature_mime_type or "image/png"
+    # Cloudinary is primary; the legacy database copy is retained only for
+    # backwards compatibility until migration is explicitly verified.
     if school and (school.headmaster_signature_key or school.headmaster_signature_url):
         try: return get_media(school.headmaster_signature_key, school.headmaster_signature_url)
         except MediaStorageError: pass
+    if school and school.headmaster_signature_data:
+        return school.headmaster_signature_data, school.headmaster_signature_mime_type or "image/png"
     return _legacy_image(school.headmaster_signature if school else None)
 
 
@@ -188,7 +191,7 @@ def update_settings(payload: dict, user=Depends(require_school_user), db: Sessio
 @router.post("/settings/signature")
 async def upload_signature(file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
     _admin(user)
-    school = _school(db, user.school_id, include_signature=True)
+    school = _school(db, user.school_id)
     raw, _ = await _read_image(file)
     data, mime = _remove_white_background_bytes(raw)
 
@@ -196,22 +199,17 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
     public_id = None
     secure_url = ""
     try:
-        # Cloudinary is still useful for external/media backup, but the
-        # transparent PNG is also stored in the database so PDF generation
-        # does not depend on a remote image download.
         public_id, secure_url = put_media(
             f"attendora/signatures/{school.id}_headmaster", data, mime
         )
-    except MediaStorageError:
-        # Do not fail the upload just because the remote media service is slow.
-        # The DB copy is sufficient for the ID-card preview and PDF.
-        public_id = None
-        secure_url = ""
+    except MediaStorageError as error:
+        raise HTTPException(503, "Could not save signature to media storage") from error
 
-    school.headmaster_signature_data = data
-    school.headmaster_signature_mime_type = mime
+    # Do not add a new BYTEA copy. Existing BYTEA values are intentionally
+    # preserved as a migration fallback and are never cleared here.
     school.headmaster_signature_key = public_id
     school.headmaster_signature_url = secure_url
+    school.headmaster_signature_mime_type = mime
 
     try:
         db.commit()
@@ -230,7 +228,7 @@ async def upload_signature(file: UploadFile = File(...), user=Depends(require_sc
 
 @router.get("/settings/signature")
 def get_signature(user=Depends(require_school_user), db: Session = Depends(get_db)):
-    signature = _school_signature(_school(db, user.school_id, include_signature=True))
+    signature = _school_signature(_school(db, user.school_id))
     if not signature: raise HTTPException(404, "Headmaster signature not uploaded")
     return Response(signature[0], media_type=signature[1], headers={"Cache-Control": "private, max-age=86400"})
 
@@ -246,7 +244,7 @@ def list_students(class_name: str | None = None, search: str | None = None, user
 @router.post("/students/{student_id}/photo")
 async def upload_student_photo(student_id: int, file: UploadFile = File(...), user=Depends(require_school_user), db: Session = Depends(get_db)):
     _admin(user)
-    item = _student(db, student_id, user.school_id, include_photo=True)
+    item = _student(db, student_id, user.school_id)
     raw, _ = await _read_image(file)
     previous = item.photo_storage_key
 
@@ -263,16 +261,15 @@ async def upload_student_photo(student_id: int, file: UploadFile = File(...), us
         public_id, secure_url = put_media(
             f"attendora/students/{item.id}/{uuid4().hex}", data, mime
         )
-    except MediaStorageError:
-        # Keep the DB copy even if Cloudinary is temporarily unavailable.
-        public_id = None
-        secure_url = ""
+    except MediaStorageError as error:
+        raise HTTPException(503, "Could not save photo to media storage") from error
 
     item.photo = None
-    item.photo_data = data
-    item.photo_mime_type = mime
+    # New uploads live in Cloudinary only. Do not overwrite an existing
+    # legacy BYTEA fallback until a separate, user-approved cleanup process.
     item.photo_storage_key = public_id
     item.photo_storage_url = secure_url
+    item.photo_mime_type = mime
 
     try:
         db.commit()
@@ -292,7 +289,7 @@ async def upload_student_photo(student_id: int, file: UploadFile = File(...), us
 @router.delete("/students/{student_id}/photo")
 def delete_student_photo(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
     _admin(user)
-    item = _student(db, student_id, user.school_id, include_photo=True)
+    item = _student(db, student_id, user.school_id)
 
     # "Remove Photo" only unlinks the photo from the student record. The
     # Cloudinary asset is intentionally retained so an accidental removal can
@@ -311,7 +308,7 @@ def delete_student_photo(student_id: int, user=Depends(require_school_user), db:
 
 @router.get("/students/{student_id}/photo")
 def get_student_photo(student_id: int, user=Depends(require_school_user), db: Session = Depends(get_db)):
-    photo = _student_photo(_student(db, student_id, user.school_id, include_photo=True))
+    photo = _student_photo(_student(db, student_id, user.school_id))
     if not photo: raise HTTPException(404, "Student photo not uploaded")
     return Response(photo[0], media_type=photo[1], headers={"Cache-Control": "private, max-age=86400"})
 

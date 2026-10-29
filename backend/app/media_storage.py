@@ -45,8 +45,12 @@ def get_bytes(
     transformation: list | None = None,
 ) -> tuple[bytes, str]:
     try:
-        _configure()
+        # A secure delivery URL can be read without Cloudinary credentials.
+        # This keeps already-uploaded media available if a runtime deployment
+        # is missing upload credentials, while uploads/deletes remain backend
+        # credential-only operations.
         if public_id and transformation:
+            _configure()
             url, _ = cloudinary.utils.cloudinary_url(
                 public_id,
                 resource_type="image",
@@ -56,6 +60,7 @@ def get_bytes(
         else:
             url = secure_url
         if not url:
+            _configure()
             url, _ = cloudinary.utils.cloudinary_url(
                 public_id,
                 resource_type="image",

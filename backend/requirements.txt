@@ -12,3 +12,4 @@ xlrd
 Pillow
 cloudinary
 python-docx
+python-dotenv
