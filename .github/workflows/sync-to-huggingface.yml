@@ -9,16 +9,36 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Sync backend to Hugging Face
-        uses: huggingface/hub-sync@v0.1.0
-        with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: Shreyashu123/attendora-backend
-          hf_token: ${{ secrets.HF_TOKEN }}
-          subdirectory: backend
-          repo_type: space
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Create or reuse Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: Shreyashu123/attendora-backend
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "GitHub Actions secret HF_TOKEN is not configured." >&2
+            exit 1
+          fi
+          uvx hf auth login --token "$HF_TOKEN"
+          uvx hf repos create "$HF_REPO_ID" --repo-type space --space-sdk gradio --exist-ok
+
+      - name: Upload backend to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO_ID: Shreyashu123/attendora-backend
+        run: |
+          uvx hf upload "$HF_REPO_ID" backend . \
+            --repo-type space \
+            --commit-message "Sync backend from GitHub Actions" \
+            --exclude ".git*" \
+            --exclude ".github*" \
+            --exclude ".env*" \
+            --exclude "__pycache__*" \
+            --exclude "*.pyc" \
+            --delete "*"
